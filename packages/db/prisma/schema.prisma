@@ -1,0 +1,477 @@
+// kenmo-ai-trader Prisma schema.
+// All money is stored as Float (JPY). JSON columns hold validated AI / config blobs.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RunType {
+  backtest
+  paper
+  live
+}
+
+enum TradingMode {
+  backtest
+  paper
+  live
+}
+
+enum StrategyStatus {
+  champion
+  challenger
+  archived
+}
+
+enum CreatedBy {
+  human
+  ai
+  system
+}
+
+enum BacktestStatus {
+  pending
+  running
+  completed
+  failed
+}
+
+enum PaperStatus {
+  running
+  paused
+  stopped
+  failed
+}
+
+enum OrderSide {
+  buy
+  sell
+}
+
+enum OrderType {
+  limit
+  marketable_limit
+}
+
+enum OrderStatus {
+  pending
+  filled
+  cancelled
+  rejected
+}
+
+enum PositionStatus {
+  open
+  closed
+}
+
+enum GuidanceRevision {
+  none
+  up
+  down
+}
+
+enum SchedulerStatus {
+  pending
+  running
+  completed
+  failed
+}
+
+enum ProposalStatus {
+  proposed
+  accepted
+  rejected
+  tested
+}
+
+enum AuditActor {
+  system
+  user
+  ai
+}
+
+model UserSetting {
+  id                      String      @id @default(cuid())
+  initialCapitalJpy       Float       @default(1000000)
+  allowMargin             Boolean     @default(false)
+  defaultStrategyVersionId String?
+  tradingMode             TradingMode @default(backtest)
+  liveTradingEnabled      Boolean     @default(false)
+  createdAt               DateTime    @default(now())
+  updatedAt               DateTime    @updatedAt
+}
+
+model StrategyVersion {
+  id              String         @id @default(cuid())
+  name            String
+  parentVersionId String?
+  status          StrategyStatus @default(challenger)
+  configJson      Json
+  promptVersion   String         @default("kenmo-v1")
+  createdBy       CreatedBy      @default(system)
+  createdReason   String?
+  createdAt       DateTime       @default(now())
+
+  backtestRuns BacktestRun[]
+  paperRuns    PaperRun[]
+  agentRuns    AgentRun[]
+
+  @@index([status])
+}
+
+model BacktestRun {
+  id                String         @id @default(cuid())
+  name              String
+  initialCapitalJpy Float
+  allowMargin       Boolean
+  startDate         DateTime
+  endDate           DateTime
+  strategyVersionId String
+  status            BacktestStatus @default(pending)
+  summaryJson       Json?
+  createdAt         DateTime       @default(now())
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  errorMessage      String?
+
+  strategyVersion StrategyVersion    @relation(fields: [strategyVersionId], references: [id])
+  orders          Order[]
+  executions      Execution[]
+  positions       Position[]
+  snapshots       PortfolioSnapshot[]
+  tradeEpisodes   TradeEpisode[]
+  agentRuns       AgentRun[]
+  schedulerEvents SchedulerEvent[]
+  proposals       EvolutionProposal[]
+
+  @@index([status])
+}
+
+model PaperRun {
+  id                String      @id @default(cuid())
+  name              String
+  initialCapitalJpy Float
+  allowMargin       Boolean
+  strategyVersionId String
+  status            PaperStatus @default(running)
+  summaryJson       Json?
+  startedAt         DateTime?
+  stoppedAt         DateTime?
+  createdAt         DateTime    @default(now())
+
+  strategyVersion StrategyVersion    @relation(fields: [strategyVersionId], references: [id])
+  orders          Order[]
+  executions      Execution[]
+  positions       Position[]
+  snapshots       PortfolioSnapshot[]
+  tradeEpisodes   TradeEpisode[]
+  agentRuns       AgentRun[]
+  schedulerEvents SchedulerEvent[]
+  proposals       EvolutionProposal[]
+}
+
+model Symbol {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  market      String
+  sector      String
+  marketCapJpy Float?
+  lotSize     Int      @default(100)
+  isActive    Boolean  @default(true)
+
+  prices      DailyPrice[]
+  financials  FinancialResult[]
+  disclosures Disclosure[]
+}
+
+model DailyPrice {
+  id            String   @id @default(cuid())
+  symbolCode    String
+  date          DateTime
+  open          Float
+  high          Float
+  low           Float
+  close         Float
+  volume        Float
+  turnoverValue Float
+
+  symbol Symbol @relation(fields: [symbolCode], references: [code])
+
+  @@unique([symbolCode, date])
+  @@index([date])
+}
+
+model FinancialResult {
+  id                    String           @id @default(cuid())
+  symbolCode            String
+  announcedAt           DateTime
+  fiscalPeriod          String
+  sales                 Float
+  operatingProfit       Float
+  ordinaryProfit        Float
+  netIncome             Float
+  salesYoyPct           Float
+  operatingProfitYoyPct Float
+  operatingMarginPct    Float
+  operatingMarginPrevPct Float
+  roePct                Float
+  progressRateOpPct     Float
+  guidanceRevision      GuidanceRevision @default(none)
+  rawJson               Json?
+
+  symbol Symbol @relation(fields: [symbolCode], references: [code])
+
+  @@index([symbolCode, announcedAt])
+}
+
+model Disclosure {
+  id             String   @id @default(cuid())
+  symbolCode     String
+  disclosedAt    DateTime
+  disclosureType String
+  title          String
+  summary        String
+  rawText        String?
+  rawJson        Json?
+
+  symbol Symbol @relation(fields: [symbolCode], references: [code])
+
+  @@index([symbolCode, disclosedAt])
+}
+
+model AgentRun {
+  id                String   @id @default(cuid())
+  runType           RunType
+  backtestRunId     String?
+  paperRunId        String?
+  strategyVersionId String
+  agentRole         String
+  taskType          String
+  modelName         String
+  promptVersion     String
+  inputJson         Json
+  outputJson        Json
+  inputHash         String
+  outputValid       Boolean  @default(true)
+  createdAt         DateTime @default(now())
+
+  backtestRun     BacktestRun?     @relation(fields: [backtestRunId], references: [id], onDelete: Cascade)
+  paperRun        PaperRun?        @relation(fields: [paperRunId], references: [id], onDelete: Cascade)
+  strategyVersion StrategyVersion  @relation(fields: [strategyVersionId], references: [id])
+  schedulerEvents SchedulerEvent[]
+  orders          Order[]
+
+  @@index([backtestRunId])
+  @@index([paperRunId])
+}
+
+model SchedulerEvent {
+  id            String          @id @default(cuid())
+  runType       RunType
+  backtestRunId String?
+  paperRunId    String?
+  eventDate     DateTime
+  virtualTime   String?
+  eventType     String
+  status        SchedulerStatus @default(completed)
+  agentRunId    String?
+  createdAt     DateTime        @default(now())
+  finishedAt    DateTime?
+  errorMessage  String?
+
+  backtestRun BacktestRun? @relation(fields: [backtestRunId], references: [id], onDelete: Cascade)
+  paperRun    PaperRun?    @relation(fields: [paperRunId], references: [id], onDelete: Cascade)
+  agentRun    AgentRun?    @relation(fields: [agentRunId], references: [id])
+
+  @@index([backtestRunId])
+  @@index([paperRunId])
+}
+
+model Order {
+  id                 String      @id @default(cuid())
+  runType            RunType
+  backtestRunId      String?
+  paperRunId         String?
+  agentRunId         String?
+  schedulerEventId   String?
+  symbolCode         String
+  side               OrderSide
+  orderType          OrderType
+  requestedBudgetJpy Float?
+  requestedQuantity  Float?
+  finalQuantity      Float?
+  limitPrice         Float?
+  status             OrderStatus @default(pending)
+  reason             String
+  rejectionReason    String?
+  doNotBuyReasonsJson Json?
+  strategy           String
+  confidence         Float
+  createdAt          DateTime    @default(now())
+
+  backtestRun BacktestRun? @relation(fields: [backtestRunId], references: [id], onDelete: Cascade)
+  paperRun    PaperRun?    @relation(fields: [paperRunId], references: [id], onDelete: Cascade)
+  agentRun    AgentRun?    @relation(fields: [agentRunId], references: [id])
+  executions  Execution[]
+
+  @@index([backtestRunId])
+  @@index([paperRunId])
+}
+
+model Execution {
+  id            String    @id @default(cuid())
+  orderId       String
+  runType       RunType
+  backtestRunId String?
+  paperRunId    String?
+  symbolCode    String
+  side          OrderSide
+  quantity      Float
+  executionPrice Float
+  commissionJpy Float
+  slippageJpy   Float
+  executedAt    DateTime
+
+  order       Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  backtestRun BacktestRun? @relation(fields: [backtestRunId], references: [id], onDelete: Cascade)
+  paperRun    PaperRun?    @relation(fields: [paperRunId], references: [id], onDelete: Cascade)
+
+  @@index([backtestRunId])
+  @@index([paperRunId])
+}
+
+model Position {
+  id                     String         @id @default(cuid())
+  runType                RunType
+  backtestRunId          String?
+  paperRunId             String?
+  symbolCode             String
+  quantity               Float
+  avgPrice               Float
+  openedAt               DateTime
+  closedAt               DateTime?
+  entryReason            String
+  exitReason             String?
+  strategy               String
+  stopLossPrice          Float?
+  highestPriceSinceEntry Float?
+  status                 PositionStatus @default(open)
+
+  backtestRun BacktestRun? @relation(fields: [backtestRunId], references: [id], onDelete: Cascade)
+  paperRun    PaperRun?    @relation(fields: [paperRunId], references: [id], onDelete: Cascade)
+
+  @@index([backtestRunId])
+  @@index([paperRunId])
+}
+
+model PortfolioSnapshot {
+  id              String   @id @default(cuid())
+  runType         RunType
+  backtestRunId   String?
+  paperRunId      String?
+  snapshotDate    DateTime
+  cashJpy         Float
+  marketValueJpy  Float
+  equityJpy       Float
+  realizedPnlJpy  Float
+  unrealizedPnlJpy Float
+  totalReturnPct  Float
+  drawdownPct     Float
+  exposurePct     Float
+  positionsJson   Json
+
+  backtestRun BacktestRun? @relation(fields: [backtestRunId], references: [id], onDelete: Cascade)
+  paperRun    PaperRun?    @relation(fields: [paperRunId], references: [id], onDelete: Cascade)
+
+  @@index([backtestRunId, snapshotDate])
+  @@index([paperRunId, snapshotDate])
+}
+
+model TradeEpisode {
+  id                        String    @id @default(cuid())
+  runType                   RunType
+  backtestRunId             String?
+  paperRunId                String?
+  symbolCode                String
+  strategy                  String
+  entryDate                 DateTime
+  exitDate                  DateTime?
+  entryPrice                Float
+  exitPrice                 Float?
+  quantity                  Float
+  pnlJpy                    Float?
+  pnlPct                    Float?
+  maxFavorableExcursionPct  Float?
+  maxAdverseExcursionPct    Float?
+  holdingDays               Int?
+  entryReason               String
+  exitReason                String?
+  thesis                    String?
+  lossType                  String?
+  invalidationConditionsJson Json?
+  featuresAtEntryJson       Json
+  outcomeLabelsJson         Json?
+  aiReviewJson              Json?
+
+  backtestRun BacktestRun? @relation(fields: [backtestRunId], references: [id], onDelete: Cascade)
+  paperRun    PaperRun?    @relation(fields: [paperRunId], references: [id], onDelete: Cascade)
+
+  @@index([backtestRunId])
+  @@index([paperRunId])
+}
+
+model EvolutionProposal {
+  id                       String         @id @default(cuid())
+  sourceBacktestRunId      String?
+  sourcePaperRunId         String?
+  parentStrategyVersionId  String
+  challengerStrategyVersionId String?
+  proposalJson             Json
+  reason                   String
+  status                   ProposalStatus @default(proposed)
+  createdAt                DateTime       @default(now())
+
+  sourceBacktestRun BacktestRun? @relation(fields: [sourceBacktestRunId], references: [id], onDelete: Cascade)
+  sourcePaperRun    PaperRun?    @relation(fields: [sourcePaperRunId], references: [id], onDelete: Cascade)
+
+  @@index([sourceBacktestRunId])
+}
+
+model AblationResult {
+  id                  String   @id @default(cuid())
+  sourceBacktestRunId String
+  name                String
+  strategyVersionId   String
+  backtestRunId       String
+  finalEquityJpy      Float
+  totalReturnPct      Float
+  annualizedReturnPct Float
+  maxDrawdownPct      Float
+  winRatePct          Float
+  profitFactor        Float
+  avgWinPct           Float
+  avgLossPct          Float
+  tradeCount          Int
+  createdAt           DateTime @default(now())
+
+  @@index([sourceBacktestRunId])
+}
+
+model AuditLog {
+  id         String     @id @default(cuid())
+  actor      AuditActor
+  action     String
+  targetType String
+  targetId   String?
+  payloadJson Json?
+  createdAt  DateTime   @default(now())
+
+  @@index([createdAt])
+}

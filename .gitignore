@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.next/
+.turbo/
+*.tsbuildinfo
+.env
+.env.local
+coverage/
+.DS_Store
+packages/db/node_modules/.prisma/
+
+# e2e artifacts
+apps/web/shots/
+apps/web/test-results/
+apps/web/playwright-report/

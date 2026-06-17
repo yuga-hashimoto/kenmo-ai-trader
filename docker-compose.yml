@@ -1,0 +1,55 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kenmo
+      POSTGRES_PASSWORD: kenmo
+      POSTGRES_DB: kenmo
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kenmo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgresql://kenmo:kenmo@db:5432/kenmo?schema=public"
+      API_PORT: "4000"
+      HERMES_MODE: "mock"
+      # Live trading stays disabled unless this is explicitly set to "true".
+      ENABLE_LIVE_TRADING: "false"
+    ports:
+      - "4000:4000"
+    # Push schema, seed sample data, then start the API.
+    command: >
+      sh -c "pnpm --filter @kenmo/db exec prisma db push --skip-generate &&
+             pnpm --filter @kenmo/db seed &&
+             pnpm --filter @kenmo/api start"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      API_INTERNAL_URL: "http://api:4000"
+    ports:
+      - "3000:3000"
+    command: sh -c "pnpm --filter @kenmo/web dev"
+
+volumes:
+  pgdata:

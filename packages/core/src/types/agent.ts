@@ -1,0 +1,96 @@
+import type {
+  AgentDecision,
+  AgentTaskType,
+  RunType,
+  StrategyKind,
+} from './index.js';
+import type { Candidate } from '../strategy/candidates.js';
+
+/** Market regime hint passed to the agent (placeholder logic in MVP). */
+export interface MarketRegime {
+  indexTrend: 'up' | 'down' | 'sideways' | 'unknown';
+  riskOn: boolean;
+  comment: string;
+}
+
+export interface AgentAccountView {
+  initialCapitalJpy: number;
+  cashJpy: number;
+  equityJpy: number;
+  buyingPowerJpy: number;
+  allowMargin: boolean;
+  totalExposureJpy: number;
+  totalReturnPct: number;
+  maxDrawdownPct: number;
+}
+
+export interface AgentRiskView {
+  maxSinglePositionPct: number;
+  maxTotalExposurePct: number;
+  stopLossPct: number;
+  takeProfitPct: number;
+  trailingStopPct: number;
+  allowNampin: boolean;
+  allowMarketBuy: boolean;
+  minConfidenceToTrade: number;
+}
+
+export interface AgentPositionView {
+  symbol: string;
+  name: string;
+  quantity: number;
+  avgPrice: number;
+  currentPrice: number;
+  unrealizedPnlJpy: number;
+  unrealizedPnlPct: number;
+  entryReason: string;
+  strategy: string;
+  stopLossPrice: number | null;
+  highestPriceSinceEntry: number | null;
+}
+
+/** The full context object handed to HermesAgent for every task. */
+export interface AgentTaskContext {
+  backtestTime: string;
+  mode: RunType;
+  taskType: AgentTaskType;
+  account: AgentAccountView;
+  riskRules: AgentRiskView;
+  positions: AgentPositionView[];
+  candidates: Candidate[];
+  marketRegime: MarketRegime;
+}
+
+/** Single trading decision returned by the agent. */
+export interface AgentTradingDecision {
+  decision: AgentDecision;
+  symbol: string;
+  strategy: StrategyKind;
+  budgetJpy: number | null;
+  limitPrice: number | null;
+  sellPositionPct: number | null;
+  confidence: number;
+  expectedHoldingDays: number | null;
+  stopLossPct: number | null;
+  reason: string;
+  /** reasons the agent considered NOT buying (>=1 required; detailed on skip) */
+  doNotBuyReasons: string[];
+  thesis: string;
+  riskFactors: string[];
+  invalidationConditions: string[];
+}
+
+/** Result of a task that may yield zero or more decisions (+ a watchlist). */
+export interface AgentTaskResult {
+  taskType: AgentTaskType;
+  decisions: AgentTradingDecision[];
+  watchlistSymbols: string[];
+  notes: string;
+}
+
+/** Narrow context for a single-symbol decision (used by runTradingDecision). */
+export interface AgentTradingContext {
+  base: AgentTaskContext;
+  candidate: Candidate | null;
+  position: AgentPositionView | null;
+}
