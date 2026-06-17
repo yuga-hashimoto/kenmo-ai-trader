@@ -11,6 +11,9 @@ import { dashboardRoutes } from './modules/dashboard/index.js';
 import { auditRoutes } from './modules/audit/index.js';
 import { schedulerRoutes, startRealtimeScheduler } from './modules/scheduler/index.js';
 import { ablationRoutes } from './modules/ablation/index.js';
+import { dataSourceRoutes } from './modules/data-sources/index.js';
+import { dataIngestionRoutes } from './modules/data-ingestion/index.js';
+import { dataQualityRoutes } from './modules/data-quality/index.js';
 
 async function buildServer() {
   const app = Fastify({ logger: true });
@@ -56,6 +59,9 @@ async function buildServer() {
   await app.register(auditRoutes);
   await app.register(schedulerRoutes);
   await app.register(ablationRoutes);
+  await app.register(dataSourceRoutes);
+  await app.register(dataIngestionRoutes);
+  await app.register(dataQualityRoutes);
 
   startRealtimeScheduler(app);
 
