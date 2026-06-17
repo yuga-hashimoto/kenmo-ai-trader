@@ -1,8 +1,10 @@
 import type { FastifyInstance } from 'fastify';
-import { prisma } from '@kenmo/db';
+import { prisma, type Prisma } from '@kenmo/db';
 import { JQuantsProvider, CsvDataImporter } from '@kenmo/core';
 
-const DATASET_NAMES = [
+const toJson = (v: unknown): Prisma.InputJsonValue => v as Prisma.InputJsonValue;
+
+const IMPLEMENTED_DATASETS = [
   'listed_issue_master',
   'daily_prices',
   'index_prices',
@@ -10,11 +12,16 @@ const DATASET_NAMES = [
   'financial_statements',
   'earnings_calendar',
   'dividends',
-  'trading_calendar',
   'margin_outstandings',
+] as const;
+
+const SKIPPED_DATASETS = [
+  'trading_calendar',
   'short_selling',
   'investor_type_trading',
 ] as const;
+
+const DATASET_NAMES = [...IMPLEMENTED_DATASETS, ...SKIPPED_DATASETS] as const;
 
 type DatasetName = (typeof DATASET_NAMES)[number];
 
@@ -33,18 +40,19 @@ async function runJQuantsIngestion(
     enableAddons: process.env.JQUANTS_ENABLE_ADDONS === 'true',
   });
 
-  await prisma.rawApiResponse.create({
-    data: {
-      ingestionRunId: runId,
-      endpoint: `jquants/${datasetName}`,
-      requestParams: { date: targetDate.toISOString().slice(0, 10) },
-      statusCode: 200,
-    },
-  });
-
   switch (datasetName) {
     case 'listed_issue_master': {
       const rows = await provider.fetchListedIssueMaster(targetDate);
+      await prisma.rawApiResponse.create({
+        data: {
+          ingestionRunId: runId,
+          endpoint: 'jquants/listed_issue_master',
+          requestParams: { date: targetDate.toISOString().slice(0, 10) },
+          statusCode: 200,
+          responseSize: JSON.stringify(rows).length,
+          fetchedAt: new Date(),
+        },
+      });
       let upserted = 0;
       for (const row of rows) {
         await prisma.symbol.upsert({
@@ -68,7 +76,21 @@ async function runJQuantsIngestion(
     }
 
     case 'daily_prices': {
+      const symbolCount = await prisma.symbol.count();
+      if (symbolCount === 0) {
+        throw new Error('Symbol master is empty — run listed_issue_master ingestion first');
+      }
       const rows = await provider.fetchDailyPrices(targetDate);
+      await prisma.rawApiResponse.create({
+        data: {
+          ingestionRunId: runId,
+          endpoint: 'jquants/daily_prices',
+          requestParams: { date: targetDate.toISOString().slice(0, 10) },
+          statusCode: 200,
+          responseSize: JSON.stringify(rows).length,
+          fetchedAt: new Date(),
+        },
+      });
       let upserted = 0;
       for (const row of rows) {
         if (row.Close == null) continue;
@@ -100,6 +122,16 @@ async function runJQuantsIngestion(
 
     case 'index_prices': {
       const rows = await provider.fetchIndexDailyPrices(targetDate);
+      await prisma.rawApiResponse.create({
+        data: {
+          ingestionRunId: runId,
+          endpoint: 'jquants/index_prices',
+          requestParams: { date: targetDate.toISOString().slice(0, 10) },
+          statusCode: 200,
+          responseSize: JSON.stringify(rows).length,
+          fetchedAt: new Date(),
+        },
+      });
       let upserted = 0;
       for (const row of rows) {
         if (row.Close == null) continue;
@@ -129,6 +161,16 @@ async function runJQuantsIngestion(
 
     case 'topix_prices': {
       const rows = await provider.fetchTopixDailyPrices(targetDate);
+      await prisma.rawApiResponse.create({
+        data: {
+          ingestionRunId: runId,
+          endpoint: 'jquants/topix_prices',
+          requestParams: { date: targetDate.toISOString().slice(0, 10) },
+          statusCode: 200,
+          responseSize: JSON.stringify(rows).length,
+          fetchedAt: new Date(),
+        },
+      });
       let upserted = 0;
       for (const row of rows) {
         if (row.Close == null) continue;
@@ -158,6 +200,39 @@ async function runJQuantsIngestion(
 
     case 'financial_statements': {
       const rows = await provider.fetchFinancialStatements(targetDate);
+      await prisma.rawApiResponse.create({
+        data: {
+          ingestionRunId: runId,
+          endpoint: 'jquants/financial_statements',
+          requestParams: { date: targetDate.toISOString().slice(0, 10) },
+          statusCode: 200,
+          responseSize: JSON.stringify(rows).length,
+          fetchedAt: new Date(),
+        },
+      });
+      const computeMetrics = async (symbolCode: string, fiscalPeriod: string, announcedDate: Date, sales: number, opProfit: number): Promise<{
+        salesYoyPct: number; operatingProfitYoyPct: number; operatingMarginPct: number;
+        operatingMarginPrevPct: number; roePct: number; progressRateOpPct: number; guidanceRevision: 'up' | 'down' | 'none';
+      }> => {
+        const oneYearPrior = new Date(announcedDate);
+        oneYearPrior.setFullYear(oneYearPrior.getFullYear() - 1);
+        const prior = await prisma.financialResult.findFirst({
+          where: {
+            symbolCode,
+            fiscalPeriod,
+            announcedAt: {
+              gte: new Date(oneYearPrior.getTime() - 30 * 24 * 60 * 60 * 1000),
+              lte: new Date(oneYearPrior.getTime() + 30 * 24 * 60 * 60 * 1000),
+            },
+          },
+          orderBy: { announcedAt: 'desc' },
+        });
+        const salesYoyPct = prior && prior.sales > 0 ? ((sales - prior.sales) / prior.sales) * 100 : 0;
+        const operatingProfitYoyPct = prior && prior.operatingProfit > 0 ? ((opProfit - prior.operatingProfit) / prior.operatingProfit) * 100 : 0;
+        const operatingMarginPct = sales > 0 ? (opProfit / sales) * 100 : 0;
+        const operatingMarginPrevPct = prior && prior.sales > 0 ? (prior.operatingProfit / prior.sales) * 100 : 0;
+        return { salesYoyPct, operatingProfitYoyPct, operatingMarginPct, operatingMarginPrevPct, roePct: 0, progressRateOpPct: 0, guidanceRevision: 'none' };
+      };
       let inserted = 0;
       for (const row of rows) {
         const announcedAt = new Date(`${row.DisclosedDate}T${row.DisclosedTime ?? '15:30'}+09:00`);
@@ -181,14 +256,8 @@ async function runJQuantsIngestion(
               operatingProfit: opProfit,
               ordinaryProfit: parseFloat(row.OrdinaryProfit) || 0,
               netIncome: parseFloat(row.Profit) || 0,
-              salesYoyPct: 0,
-              operatingProfitYoyPct: 0,
-              operatingMarginPct: sales > 0 ? (opProfit / sales) * 100 : 0,
-              operatingMarginPrevPct: 0,
-              roePct: 0,
-              progressRateOpPct: 0,
-              guidanceRevision: 'none',
-              rawJson: row as unknown as Record<string, unknown>,
+              ...(await computeMetrics(row.LocalCode, row.TypeOfCurrentPeriod, announcedAt, sales, opProfit)),
+              rawJson: toJson(row),
             },
           });
           inserted++;
@@ -203,6 +272,16 @@ async function runJQuantsIngestion(
       const to = new Date(targetDate);
       to.setDate(to.getDate() + 30);
       const rows = await provider.fetchEarningsCalendar(from, to);
+      await prisma.rawApiResponse.create({
+        data: {
+          ingestionRunId: runId,
+          endpoint: 'jquants/earnings_calendar',
+          requestParams: { date: targetDate.toISOString().slice(0, 10) },
+          statusCode: 200,
+          responseSize: JSON.stringify(rows).length,
+          fetchedAt: new Date(),
+        },
+      });
       let upserted = 0;
       for (const row of rows) {
         await prisma.earningsCalendar.upsert({
@@ -212,11 +291,11 @@ async function runJQuantsIngestion(
             scheduledAt: new Date(row.Date),
             fiscalPeriod: row.FiscalQuarter,
             source: 'jquants',
-            rawJson: row as unknown as Record<string, unknown>,
+            rawJson: toJson(row),
           },
           update: {
             fiscalPeriod: row.FiscalQuarter,
-            rawJson: row as unknown as Record<string, unknown>,
+            rawJson: toJson(row),
           },
         });
         upserted++;
@@ -226,6 +305,16 @@ async function runJQuantsIngestion(
 
     case 'dividends': {
       const rows = await provider.fetchDividends(targetDate);
+      await prisma.rawApiResponse.create({
+        data: {
+          ingestionRunId: runId,
+          endpoint: 'jquants/dividends',
+          requestParams: { date: targetDate.toISOString().slice(0, 10) },
+          statusCode: 200,
+          responseSize: JSON.stringify(rows).length,
+          fetchedAt: new Date(),
+        },
+      });
       let inserted = 0;
       for (const row of rows) {
         const annualDiv = parseFloat(row.AnnualDividend) || 0;
@@ -236,7 +325,7 @@ async function runJQuantsIngestion(
             announcedAt: new Date(row.AnnouncementDate),
             dividendPerShare: annualDiv,
             dividendType: 'annual',
-            rawJson: row as unknown as Record<string, unknown>,
+            rawJson: toJson(row),
           },
         });
         inserted++;
@@ -246,6 +335,16 @@ async function runJQuantsIngestion(
 
     case 'margin_outstandings': {
       const rows = await provider.fetchMarginOutstandings(targetDate);
+      await prisma.rawApiResponse.create({
+        data: {
+          ingestionRunId: runId,
+          endpoint: 'jquants/margin_outstandings',
+          requestParams: { date: targetDate.toISOString().slice(0, 10) },
+          statusCode: 200,
+          responseSize: JSON.stringify(rows).length,
+          fetchedAt: new Date(),
+        },
+      });
       let upserted = 0;
       for (const row of rows) {
         await prisma.marginOutstanding.upsert({
@@ -255,12 +354,12 @@ async function runJQuantsIngestion(
             date: new Date(row.Date),
             marginBuyQty: parseFloat(row.LongMarginTradeVolume) || null,
             marginSellQty: parseFloat(row.ShortMarginTradeVolume) || null,
-            rawJson: row as unknown as Record<string, unknown>,
+            rawJson: toJson(row),
           },
           update: {
             marginBuyQty: parseFloat(row.LongMarginTradeVolume) || null,
             marginSellQty: parseFloat(row.ShortMarginTradeVolume) || null,
-            rawJson: row as unknown as Record<string, unknown>,
+            rawJson: toJson(row),
           },
         });
         upserted++;
@@ -268,8 +367,12 @@ async function runJQuantsIngestion(
       return { count: upserted };
     }
 
-    default:
+    default: {
+      if ((SKIPPED_DATASETS as readonly string[]).includes(datasetName)) {
+        return { count: -1 }; // sentinel for skipped
+      }
       return { count: 0 };
+    }
   }
 }
 
@@ -343,15 +446,16 @@ export async function dataIngestionRoutes(app: FastifyInstance): Promise<void> {
             targetDate ? new Date(targetDate) : new Date(),
           );
         }
+        const status = result.count === -1 ? 'skipped' : 'completed';
         await prisma.dataIngestionRun.update({
           where: { id: run.id },
-          data: { status: 'completed', finishedAt: new Date(), recordCount: result.count },
+          data: { status, finishedAt: new Date(), recordCount: result.count === -1 ? 0 : result.count },
         });
         await prisma.dataSource.update({
           where: { id: dataSource.id },
           data: {
             lastFetchedAt: new Date(),
-            lastFetchCount: result.count,
+            lastFetchCount: result.count === -1 ? 0 : result.count,
             lastError: null,
           },
         });

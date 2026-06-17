@@ -229,6 +229,10 @@ export class JQuantsProvider {
   constructor(private readonly config: JQuantsConfig) {
     this.idToken = config.idToken;
     this.refreshToken = config.refreshToken;
+    // If a token is provided directly, assume it's valid for 23h from now
+    if (config.idToken) {
+      this.tokenExpiresAt = Date.now() + 23 * 60 * 60 * 1000;
+    }
   }
 
   private async getIdToken(): Promise<string> {

@@ -46,12 +46,55 @@ export class CsvDataImporter {
     return s.trim().slice(0, 10);
   }
 
+  /** Split CSV into rows, respecting double-quoted fields that can contain newlines.
+   *  Passes raw content through unchanged — parseCsvRow handles all field-level parsing. */
+  private static splitCsvRows(csv: string): string[] {
+    const rows: string[] = [];
+    let row = '';
+    let inQuote = false;
+    for (let i = 0; i < csv.length; i++) {
+      const ch = csv[i]!;
+      if (ch === '"') {
+        inQuote = !inQuote; // simple toggle: "" toggles false then true = stays inside
+        row += ch;
+      } else if ((ch === '\r' || ch === '\n') && !inQuote) {
+        if (ch === '\r' && csv[i + 1] === '\n') i++;
+        if (row.trim()) rows.push(row);
+        row = '';
+      } else {
+        row += ch;
+      }
+    }
+    if (row.trim()) rows.push(row);
+    return rows;
+  }
+
+  /** Parse a single CSV row into fields, respecting RFC-4180 quoted fields. */
+  private static parseCsvRow(line: string): string[] {
+    const fields: string[] = [];
+    let field = '';
+    let inQuote = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuote && line[i + 1] === '"') { field += '"'; i++; }
+        else { inQuote = !inQuote; }
+      } else if (ch === ',' && !inQuote) {
+        fields.push(field);
+        field = '';
+      } else {
+        field += ch;
+      }
+    }
+    fields.push(field);
+    return fields;
+  }
+
   static importSymbolsCsv(csv: string): ImportedSymbol[] {
-    const lines = csv.trim().split(/\r?\n/).slice(1);
+    const lines = CsvDataImporter.splitCsvRows(csv).slice(1);
     return lines
-      .filter((l) => l.trim())
       .map((l) => {
-        const cols = l.split(',');
+        const cols = CsvDataImporter.parseCsvRow(l);
         return {
           code: cols[0]?.trim() ?? '',
           name: cols[1]?.trim() ?? '',
@@ -66,11 +109,10 @@ export class CsvDataImporter {
   }
 
   static importDailyPricesCsv(csv: string): DailyBar[] {
-    const lines = csv.trim().split(/\r?\n/).slice(1);
+    const lines = CsvDataImporter.splitCsvRows(csv).slice(1);
     return lines
-      .filter((l) => l.trim())
       .map((l) => {
-        const cols = l.split(',');
+        const cols = CsvDataImporter.parseCsvRow(l);
         return {
           symbolCode: cols[0]?.trim() ?? '',
           date: CsvDataImporter.parseDate(cols[1]),
@@ -86,11 +128,10 @@ export class CsvDataImporter {
   }
 
   static importFinancialStatementsCsv(csv: string): FinancialResultData[] {
-    const lines = csv.trim().split(/\r?\n/).slice(1);
+    const lines = CsvDataImporter.splitCsvRows(csv).slice(1);
     return lines
-      .filter((l) => l.trim())
       .map((l) => {
-        const cols = l.split(',');
+        const cols = CsvDataImporter.parseCsvRow(l);
         const guidanceRaw = cols[13]?.trim() ?? 'none';
         const guidanceRevision: GuidanceRevision =
           guidanceRaw === 'up' || guidanceRaw === 'down' ? guidanceRaw : 'none';
@@ -115,11 +156,10 @@ export class CsvDataImporter {
   }
 
   static importDisclosuresCsv(csv: string): DisclosureData[] {
-    const lines = csv.trim().split(/\r?\n/).slice(1);
+    const lines = CsvDataImporter.splitCsvRows(csv).slice(1);
     return lines
-      .filter((l) => l.trim())
       .map((l) => {
-        const cols = l.split(',');
+        const cols = CsvDataImporter.parseCsvRow(l);
         return {
           symbolCode: cols[0]?.trim() ?? '',
           disclosedAt: CsvDataImporter.parseDate(cols[1]),
@@ -132,11 +172,10 @@ export class CsvDataImporter {
   }
 
   static importIndexPricesCsv(csv: string): ImportedIndexPrice[] {
-    const lines = csv.trim().split(/\r?\n/).slice(1);
+    const lines = CsvDataImporter.splitCsvRows(csv).slice(1);
     return lines
-      .filter((l) => l.trim())
       .map((l) => {
-        const cols = l.split(',');
+        const cols = CsvDataImporter.parseCsvRow(l);
         return {
           indexCode: cols[0]?.trim() ?? '',
           date: CsvDataImporter.parseDate(cols[1]),
@@ -151,11 +190,10 @@ export class CsvDataImporter {
   }
 
   static importMarginCsv(csv: string): ImportedMarginRow[] {
-    const lines = csv.trim().split(/\r?\n/).slice(1);
+    const lines = CsvDataImporter.splitCsvRows(csv).slice(1);
     return lines
-      .filter((l) => l.trim())
       .map((l) => {
-        const cols = l.split(',');
+        const cols = CsvDataImporter.parseCsvRow(l);
         return {
           symbolCode: cols[0]?.trim() ?? '',
           date: CsvDataImporter.parseDate(cols[1]),
@@ -169,11 +207,10 @@ export class CsvDataImporter {
   }
 
   static importShortSellingCsv(csv: string): ImportedShortSellingRow[] {
-    const lines = csv.trim().split(/\r?\n/).slice(1);
+    const lines = CsvDataImporter.splitCsvRows(csv).slice(1);
     return lines
-      .filter((l) => l.trim())
       .map((l) => {
-        const cols = l.split(',');
+        const cols = CsvDataImporter.parseCsvRow(l);
         return {
           symbolCode: cols[0]?.trim() ?? '',
           reportDate: CsvDataImporter.parseDate(cols[1]),
