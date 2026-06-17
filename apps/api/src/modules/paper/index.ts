@@ -163,10 +163,32 @@ export async function paperRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get<{ Params: { id: string } }>('/api/paper-runs/:id/orders', async (req) => {
-    return prisma.order.findMany({
+    const orders = await prisma.order.findMany({
       where: { paperRunId: req.params.id },
       orderBy: { createdAt: 'asc' },
       include: { executions: true },
+    });
+    // Attach the deciding session's time-of-day (場前/寄り/引け) so the UI can show
+    // "when" a trade happened beyond just the date (daily-bar model has no minute fills).
+    const eventIds = [...new Set(orders.map((o) => o.schedulerEventId).filter(Boolean))] as string[];
+    const events = eventIds.length
+      ? await prisma.schedulerEvent.findMany({
+          where: { id: { in: eventIds } },
+          select: { id: true, virtualTime: true, eventType: true },
+        })
+      : [];
+    const timeById = new Map(events.map((e) => [e.id, e]));
+    return orders.map((o) => {
+      const ev = o.schedulerEventId ? timeById.get(o.schedulerEventId) : undefined;
+      const exec = o.executions[0];
+      return {
+        ...o,
+        sessionTime: ev?.virtualTime ?? null,
+        sessionType: ev?.eventType ?? null,
+        executionPrice: exec?.executionPrice ?? null,
+        executedQuantity: exec?.quantity ?? null,
+        executedAt: exec?.executedAt ?? null,
+      };
     });
   });
 
