@@ -475,3 +475,183 @@ model AuditLog {
 
   @@index([createdAt])
 }
+
+enum DataSourceType {
+  jquants
+  tdnet
+  edinet
+  kabu_station
+  csv
+  seed
+}
+
+enum IngestionStatus {
+  pending
+  running
+  completed
+  failed
+  skipped
+}
+
+model DataSource {
+  id             String         @id @default(cuid())
+  sourceType     DataSourceType @unique
+  enabled        Boolean        @default(false)
+  configJson     Json?
+  lastFetchedAt  DateTime?
+  lastFetchCount Int?
+  lastError      String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  ingestionRuns DataIngestionRun[]
+}
+
+model DataIngestionRun {
+  id           String          @id @default(cuid())
+  dataSourceId String
+  datasetName  String
+  targetDate   DateTime?
+  fromDate     DateTime?
+  toDate       DateTime?
+  status       IngestionStatus @default(pending)
+  recordCount  Int?
+  errorMessage String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  createdAt    DateTime        @default(now())
+
+  dataSource   DataSource       @relation(fields: [dataSourceId], references: [id])
+  rawResponses RawApiResponse[]
+
+  @@index([dataSourceId, createdAt])
+  @@index([status])
+}
+
+model RawApiResponse {
+  id             String   @id @default(cuid())
+  ingestionRunId String
+  endpoint       String
+  requestParams  Json?
+  responseSize   Int?
+  statusCode     Int?
+  fetchedAt      DateTime @default(now())
+
+  ingestionRun DataIngestionRun @relation(fields: [ingestionRunId], references: [id], onDelete: Cascade)
+
+  @@index([ingestionRunId])
+}
+
+model SymbolMasterHistory {
+  id         String   @id @default(cuid())
+  symbolCode String
+  changeDate DateTime
+  changeType String
+  oldValue   Json?
+  newValue   Json?
+  source     String
+  createdAt  DateTime @default(now())
+
+  @@index([symbolCode])
+  @@index([changeDate])
+}
+
+model IndexDailyPrice {
+  id        String   @id @default(cuid())
+  indexCode String
+  date      DateTime
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    Float?
+
+  @@unique([indexCode, date])
+  @@index([date])
+}
+
+model DisclosureDocument {
+  id               String   @id @default(cuid())
+  symbolCode       String?
+  disclosureNumber String?
+  docId            String?
+  source           String
+  docTypeCode      String?
+  docType          String?
+  title            String
+  submittedAt      DateTime
+  periodStart      DateTime?
+  periodEnd        DateTime?
+  pdfUrl           String?
+  xbrlUrl          String?
+  rawMetaJson      Json?
+  createdAt        DateTime @default(now())
+
+  @@index([symbolCode, submittedAt])
+  @@index([source, submittedAt])
+}
+
+model Dividend {
+  id               String    @id @default(cuid())
+  symbolCode       String
+  announcedAt      DateTime?
+  exDividendDate   DateTime?
+  paymentDate      DateTime?
+  dividendPerShare Float
+  dividendType     String?
+  rawJson          Json?
+
+  @@index([symbolCode, exDividendDate])
+}
+
+model MarginOutstanding {
+  id              String   @id @default(cuid())
+  symbolCode      String
+  date            DateTime
+  marginBuyQty    Float?
+  marginSellQty   Float?
+  marginBuyValue  Float?
+  marginSellValue Float?
+  rawJson         Json?
+
+  @@unique([symbolCode, date])
+  @@index([date])
+}
+
+model ShortSellingPosition {
+  id               String   @id @default(cuid())
+  symbolCode       String
+  reportDate       DateTime
+  shortPositionQty Float?
+  shortPositionPct Float?
+  holderName       String?
+  rawJson          Json?
+
+  @@index([symbolCode, reportDate])
+}
+
+model CorporateAction {
+  id         String   @id @default(cuid())
+  symbolCode String
+  actionDate DateTime
+  actionType String
+  splitRatio Float?
+  details    Json?
+  createdAt  DateTime @default(now())
+
+  @@index([symbolCode, actionDate])
+}
+
+model EarningsCalendar {
+  id               String   @id @default(cuid())
+  symbolCode       String
+  scheduledAt      DateTime
+  fiscalPeriod     String?
+  expectedSales    Float?
+  expectedOpProfit Float?
+  source           String?
+  rawJson          Json?
+
+  @@unique([symbolCode, scheduledAt])
+  @@index([scheduledAt])
+}
