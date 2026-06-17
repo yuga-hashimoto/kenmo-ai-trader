@@ -132,6 +132,12 @@ export interface BacktestEngineParams {
   endDate: string;
   modelName?: string;
   promptVersion?: string;
+  /**
+   * Resume from an existing portfolio (live daily stepping) instead of starting
+   * flat. When set, the run continues cash/positions/peak-equity from this state
+   * so drawdown and holding periods stay continuous across real trading days.
+   */
+  initialPortfolio?: import('../portfolio/accounting.js').PortfolioState;
 }
 
 let __seq = 0;
@@ -169,7 +175,7 @@ export class BacktestEngine {
     const symbolName = new Map(symbols.map((s) => [s.code, s.name]));
     const lotByCode = new Map(symbols.map((s) => [s.code, s.lotSize]));
 
-    let portfolio: PortfolioState = createPortfolio(initialCapitalJpy);
+    let portfolio: PortfolioState = this.params.initialPortfolio ?? createPortfolio(initialCapitalJpy);
 
     const orders: EngineOrderRecord[] = [];
     const executions: EngineExecutionRecord[] = [];

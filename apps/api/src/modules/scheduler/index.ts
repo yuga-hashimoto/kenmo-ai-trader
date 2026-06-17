@@ -6,15 +6,47 @@ import {
   type SessionEvent,
 } from '@kenmo/core';
 import { audit } from '../audit/index.js';
+import { catchUpRun } from '../../lib/liveTrading.js';
 
 let scheduler: RealtimeMarketScheduler | null = null;
 let lastEvent: SessionEvent | null = null;
+// Runs currently being stepped, so a long AI catch-up never overlaps itself.
+const steppingRuns = new Set<string>();
+
+/** Session events after which the day's market data is final enough to trade on. */
+const TRADE_TRIGGER_EVENTS = new Set(['after_close_analysis']);
+
+/**
+ * Drive live paper trading for every running run when a trading day closes. Each
+ * run is advanced through all unprocessed market-data days (reconstruct portfolio
+ * → run the day's AI sessions → append orders/fills/positions/snapshot). Runs in
+ * the background with a per-run guard so a slow AI provider can't stall the loop.
+ * Never touches a real broker.
+ */
+function triggerLiveTrading(app: FastifyInstance, event: SessionEvent): void {
+  if (!TRADE_TRIGGER_EVENTS.has(event.eventType)) return;
+  void (async () => {
+    const runningPaper = await prisma.paperRun.findMany({ where: { status: 'running' } });
+    for (const run of runningPaper) {
+      if (steppingRuns.has(run.id)) continue;
+      steppingRuns.add(run.id);
+      void catchUpRun(run.id)
+        .then((steps) => {
+          if (steps.length > 0) {
+            app.log.info({ runId: run.id, days: steps.length }, 'live trading advanced');
+          }
+        })
+        .catch((err) => app.log.error({ runId: run.id, err }, 'live trading step failed'))
+        .finally(() => steppingRuns.delete(run.id));
+    }
+  })();
+}
 
 /**
  * Starts the RealtimeMarketScheduler when ENABLE_REALTIME_SCHEDULER=true. On each
- * JST session event it records a SchedulerEvent + AuditLog for every running
- * PaperRun, proving the live loop operates. (Incremental live paper order
- * processing hooks in here; it never touches a real broker.)
+ * JST session event it records a SchedulerEvent heartbeat for every running
+ * PaperRun, and at end-of-day it advances live paper trading. Never touches a
+ * real broker.
  */
 export function startRealtimeScheduler(app: FastifyInstance): void {
   if (process.env.ENABLE_REALTIME_SCHEDULER !== 'true') return;
@@ -40,6 +72,7 @@ export function startRealtimeScheduler(app: FastifyInstance): void {
       if (runningPaper.length > 0) {
         await audit('system', 'scheduler.session_event', 'PaperRun', null, event);
       }
+      triggerLiveTrading(app, event);
     },
     { pollMs: Number(process.env.SCHEDULER_POLL_MS ?? 60_000) },
   );

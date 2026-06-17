@@ -6,6 +6,7 @@ import { loadMarketDataProvider } from '../../lib/marketData.js';
 import { parseStrategyConfig } from '../../lib/config.js';
 import { getAgent } from '../../lib/agent.js';
 import { persistRunResult } from '../../lib/persist.js';
+import { runDailyStep, catchUpRun } from '../../lib/liveTrading.js';
 import { audit } from '../audit/index.js';
 
 /**
@@ -111,6 +112,25 @@ export async function paperRoutes(app: FastifyInstance): Promise<void> {
       await audit('user', `paper.${status}`, 'PaperRun', run.id, {});
       return run;
     };
+
+  // ---- Live trading (forward, day-by-day; no historical replay) ----
+  // Advance exactly one unprocessed trading day for this run.
+  app.post<{ Params: { id: string } }>('/api/paper-runs/:id/step', async (req) => {
+    return runDailyStep(req.params.id);
+  });
+
+  // Mark the run live and catch it up to the latest available market day in the
+  // background (the first catch-up over historical days can take a while with a
+  // real AI provider, so it is not awaited).
+  app.post<{ Params: { id: string } }>('/api/paper-runs/:id/go-live', async (req, reply) => {
+    const run = await prisma.paperRun.update({
+      where: { id: req.params.id },
+      data: { status: 'running', startedAt: new Date(), stoppedAt: null },
+    });
+    await audit('user', 'paper.go_live', 'PaperRun', run.id, {});
+    void catchUpRun(run.id).catch(() => undefined);
+    return reply.send({ ...run, message: 'live trading started; catching up in background' });
+  });
 
   app.post<{ Params: { id: string } }>('/api/paper-runs/:id/pause', setStatus('paused'));
   app.post<{ Params: { id: string } }>('/api/paper-runs/:id/resume', setStatus('running'));
