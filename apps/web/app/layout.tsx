@@ -24,6 +24,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <Link href="/audit">監査ログ</Link>
               <div style={{ marginTop: 8, fontSize: 11, color: '#888', fontWeight: 600, letterSpacing: '0.05em' }}>DATA</div>
               <Link href="/data/ingestion">データ取得ジョブ</Link>
+              <Link href="/data/bootstrap">無料一括データ構築</Link>
               <Link href="/data/symbols">銘柄マスター</Link>
               <Link href="/data/quality">データ品質</Link>
               <Link href="/settings/data-sources">データソース設定</Link>

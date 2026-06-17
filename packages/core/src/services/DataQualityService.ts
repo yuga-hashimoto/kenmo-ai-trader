@@ -43,6 +43,10 @@ export class DataQualityService {
       ...this.checkDelistedSymbols(input),
       ...this.checkTimepointConsistency(input),
       ...this.checkDuplicateDisclosures(input),
+      ...this.checkOhlcInconsistencies(input),
+      ...this.checkConsecutiveZeroVolume(input),
+      ...this.checkTopixProxyMissing(input),
+      ...this.checkMissingFinancialsAndCalendar(input),
     ];
     return {
       checkedAt: new Date().toISOString(),
@@ -202,5 +206,83 @@ export class DataQualityService {
           message: `同じ開示の重複保存: ${key} (${count}件)`,
         };
       });
+  }
+
+  private checkOhlcInconsistencies(input: DataQualityInput): QualityIssue[] {
+    const issues: QualityIssue[] = [];
+    for (const p of input.prices) {
+      if (p.high < p.low || p.high < p.close || p.low > p.close || p.open > p.high || p.open < p.low) {
+        issues.push({
+          severity: 'error',
+          checkName: 'ohlc_inconsistency',
+          symbolCode: p.symbolCode,
+          date: p.date,
+          message: `OHLC不整合: open=${p.open}, high=${p.high}, low=${p.low}, close=${p.close} (${p.symbolCode} ${p.date})`,
+        });
+      }
+    }
+    return issues;
+  }
+
+  private checkConsecutiveZeroVolume(input: DataQualityInput): QualityIssue[] {
+    const issues: QualityIssue[] = [];
+    const bySymbol = new Map<string, DailyBar[]>();
+    for (const bar of input.prices) {
+      const arr = bySymbol.get(bar.symbolCode) ?? [];
+      arr.push(bar);
+      bySymbol.set(bar.symbolCode, arr);
+    }
+    for (const [code, bars] of bySymbol) {
+      const sorted = [...bars].sort((a, b) => a.date.localeCompare(b.date));
+      let zeroCount = 0;
+      for (const bar of sorted) {
+        if (bar.volume === 0) {
+          zeroCount++;
+          if (zeroCount >= 10) {
+            issues.push({
+              severity: 'warning',
+              checkName: 'consecutive_zero_volume',
+              symbolCode: code,
+              date: bar.date,
+              message: `10日以上連続で出来高0: ${code} ${bar.date}まで`,
+            });
+            break;
+          }
+        } else {
+          zeroCount = 0;
+        }
+      }
+    }
+    return issues;
+  }
+
+  private checkTopixProxyMissing(input: DataQualityInput): QualityIssue[] {
+    const hasTopix = input.prices.some((p) => p.symbolCode === 'TOPIX' || p.symbolCode === '^TOPX');
+    if (!hasTopix && input.tradingDates.length > 0) {
+      return [
+        {
+          severity: 'warning',
+          checkName: 'topix_proxy_missing',
+          message: 'TOPIX指数の価格データが存在しません。一部の戦略/市場レジームフィルターが正常に動作しない可能性があります。',
+        },
+      ];
+    }
+    return [];
+  }
+
+  private checkMissingFinancialsAndCalendar(input: DataQualityInput): QualityIssue[] {
+    const issues: QualityIssue[] = [];
+    const financialsSet = new Set(input.financials.map((f) => f.symbolCode));
+    for (const symbol of input.symbols) {
+      if (symbol.isActive && !financialsSet.has(symbol.code)) {
+        issues.push({
+          severity: 'warning',
+          checkName: 'missing_financials',
+          symbolCode: symbol.code,
+          message: `財務諸表データが欠損しています: ${symbol.code}`,
+        });
+      }
+    }
+    return issues;
   }
 }

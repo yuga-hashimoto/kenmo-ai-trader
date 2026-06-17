@@ -223,16 +223,82 @@ export class JQuantsTDnetProvider implements TDnetProvider {
   classifyDisclosure = this.seed.classifyDisclosure.bind(this.seed);
 }
 
+export class YanoshinTDnetProvider implements TDnetProvider {
+  private readonly seed = new SeedDisclosureProvider();
+
+  constructor() {}
+
+  private toDateStr(date: Date): string {
+    return date.toISOString().slice(0, 10).replace(/-/g, '');
+  }
+
+  async fetchDisclosureIndex(from: Date, to: Date): Promise<TDnetDisclosureIndex[]> {
+    const results: TDnetDisclosureIndex[] = [];
+    const cur = new Date(from.getTime());
+    while (cur <= to) {
+      const dateStr = this.toDateStr(cur);
+      const url = `https://webapi.yanoshin.jp/webapi/tdnet/list/${dateStr}.json`;
+      try {
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json() as any[];
+          if (Array.isArray(data)) {
+            for (const item of data) {
+              const td = item.Tdnet;
+              if (!td) continue;
+              
+              const rawCode = String(td.company_code || '').trim();
+              let code = rawCode;
+              // Normalization to 5 digits ending with 0 if it is 4 digits
+              if (code.length === 5 && code.endsWith('0')) {
+                // Already JQuants format
+              } else if (code.length === 4) {
+                code = code + '0';
+              }
+              
+              results.push({
+                disclosureNumber: td.id,
+                submittedAt: td.pubdate.replace(' ', 'T') + '+09:00',
+                symbolCode: code,
+                companyName: td.company_name,
+                title: td.title,
+                category: this.classifyDisclosure(td.title),
+                pdfUrl: td.document_url,
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.warn(`[YanoshinTDnetProvider] Failed to fetch TDnet for ${dateStr}:`, String(e));
+      }
+      cur.setDate(cur.getDate() + 1);
+    }
+    return results;
+  }
+
+  async fetchDisclosureDocument(
+    _disclosureNumber: string,
+    _fileType: TDnetDocFileType,
+  ): Promise<TDnetDocument | null> {
+    return null; // document binary download not supported on free API
+  }
+
+  parseDisclosureText = this.seed.parseDisclosureText.bind(this.seed);
+  classifyDisclosure = this.seed.classifyDisclosure.bind(this.seed);
+}
+
 export function createTDnetProvider(env: NodeJS.ProcessEnv = process.env): TDnetProvider {
-  if (env.TDNET_ENABLED !== 'true') return new SeedDisclosureProvider();
+  if (env.TDNET_ENABLED !== 'true') {
+    return new YanoshinTDnetProvider();
+  }
   if (!env.TDNET_API_KEY) {
-    console.warn('TDNET_ENABLED=true but TDNET_API_KEY not set — falling back to SeedDisclosureProvider');
-    return new SeedDisclosureProvider();
+    console.warn('TDNET_ENABLED=true but TDNET_API_KEY not set — falling back to YanoshinTDnetProvider');
+    return new YanoshinTDnetProvider();
   }
   const baseUrl = env.TDNET_API_BASE_URL ?? '';
   if (!baseUrl) {
-    console.warn('TDNET_API_BASE_URL not set — falling back to SeedDisclosureProvider');
-    return new SeedDisclosureProvider();
+    console.warn('TDNET_API_BASE_URL not set — falling back to YanoshinTDnetProvider');
+    return new YanoshinTDnetProvider();
   }
   return new HttpTDnetProvider(baseUrl, env.TDNET_API_KEY);
 }

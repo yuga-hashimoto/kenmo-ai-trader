@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '@kenmo/db';
+import { parseYahooFinanceMaxSymbols } from '../data-ingestion/yahooFinanceConfig.js';
 
-const SOURCE_TYPES = ['jquants', 'tdnet', 'edinet', 'kabu_station', 'csv', 'seed'] as const;
+const SOURCE_TYPES = ['jquants', 'yahoo_finance', 'yfinance_python', 'jpx', 'tdnet', 'edinet', 'kabu_station', 'csv', 'seed'] as const;
 type SourceType = (typeof SOURCE_TYPES)[number];
 
 function getSourceStatus(sourceType: SourceType) {
@@ -10,12 +11,32 @@ function getSourceStatus(sourceType: SourceType) {
     case 'jquants':
       return {
         hasCredentials:
+          !!env.JQUANTS_API_KEY ||
           !!(env.JQUANTS_EMAIL && env.JQUANTS_PASSWORD) ||
           !!env.JQUANTS_REFRESH_TOKEN ||
           !!env.JQUANTS_ID_TOKEN,
         plan: env.JQUANTS_PLAN ?? 'free',
         addonsEnabled: env.JQUANTS_ENABLE_ADDONS === 'true',
-        baseUrl: env.JQUANTS_BASE_URL ?? 'https://api.jquants.com/v1',
+        baseUrl: env.JQUANTS_BASE_URL ?? (env.JQUANTS_API_KEY ? 'https://api.jquants.com/v2' : 'https://api.jquants.com/v1'),
+      };
+    case 'yahoo_finance':
+      return {
+        enabled: env.YAHOO_FINANCE_ENABLED !== 'false',
+        hasConfiguredSymbols: !!env.YAHOO_FINANCE_SYMBOLS,
+        maxSymbols: parseYahooFinanceMaxSymbols(env.YAHOO_FINANCE_MAX_SYMBOLS) ?? null,
+        baseUrl: env.YAHOO_FINANCE_BASE_URL ?? 'https://query1.finance.yahoo.com',
+        note: 'Yahoo Finance .T ticker data, delayed and informational only',
+      };
+    case 'yfinance_python':
+      return {
+        enabled: env.YFINANCE_ENABLED === 'true',
+        pythonBin: env.YFINANCE_PYTHON_BIN || 'python3',
+        note: 'Python yfinance library fallback for Japan ticker data',
+      };
+    case 'jpx':
+      return {
+        enabled: true,
+        note: 'JPX official listed issues metadata (Excel)',
       };
     case 'tdnet':
       return {

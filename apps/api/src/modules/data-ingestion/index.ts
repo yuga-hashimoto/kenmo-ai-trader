@@ -4,11 +4,17 @@ import type { Prisma } from '@kenmo/db';
 import { createHash } from 'node:crypto';
 import {
   JQuantsProvider,
+  YahooFinanceProvider,
+  YFinancePythonProvider,
+  JPXListedIssueProvider,
+  createEdinetProvider,
+  createTDnetProvider,
   CsvDataImporter,
   assertKnownDailyPriceSymbols,
   normalizeFinancialStatements,
   type DailyBar,
 } from '@kenmo/core';
+import { parseYahooFinanceMaxSymbols } from './yahooFinanceConfig.js';
 
 const DATASET_NAMES = [
   'listed_issue_master',
@@ -21,7 +27,18 @@ const DATASET_NAMES = [
   'margin_outstandings',
 ] as const;
 
+const YAHOO_DATASET_NAMES = [
+  'daily_prices',
+  'index_prices',
+  'dividends',
+  'splits',
+  'financial_statements',
+  'earnings_calendar',
+] as const;
+
 type DatasetName = (typeof DATASET_NAMES)[number];
+type YahooDatasetName = (typeof YAHOO_DATASET_NAMES)[number];
+type SourceType = 'jquants' | 'yahoo_finance' | 'yfinance_python' | 'jpx' | 'tdnet' | 'edinet' | 'kabu_station' | 'csv' | 'seed';
 
 function responseMeta(payload: unknown): { responseSize: number; responseHash: string; rowCount: number } {
   const body = JSON.stringify(payload);
@@ -78,6 +95,7 @@ async function assertDailyPriceSymbolsExist(rows: DailyBar[]): Promise<void> {
   assertKnownDailyPriceSymbols(rows, existing.map((s) => s.code));
 }
 
+// J-Quants Ingestion
 async function runJQuantsIngestion(
   runId: string,
   datasetName: DatasetName,
@@ -86,7 +104,8 @@ async function runJQuantsIngestion(
   const endpoint = `jquants/${datasetName}`;
   const requestParams = { date: targetDate.toISOString().slice(0, 10) };
   const provider = new JQuantsProvider({
-    baseUrl: process.env.JQUANTS_BASE_URL ?? 'https://api.jquants.com/v1',
+    baseUrl: process.env.JQUANTS_BASE_URL ?? (process.env.JQUANTS_API_KEY ? 'https://api.jquants.com/v2' : 'https://api.jquants.com/v1'),
+    apiKey: process.env.JQUANTS_API_KEY,
     email: process.env.JQUANTS_EMAIL,
     password: process.env.JQUANTS_PASSWORD,
     refreshToken: process.env.JQUANTS_REFRESH_TOKEN,
@@ -230,8 +249,17 @@ async function runJQuantsIngestion(
       const rows = await provider.fetchFinancialStatements(targetDate);
       await saveRawApiSuccess(runId, endpoint, requestParams, rows);
       const normalizedRows = normalizeFinancialStatements(rows);
+      const existingSymbols = new Set(
+        (
+          await prisma.symbol.findMany({
+            where: { code: { in: [...new Set(normalizedRows.map((row) => row.symbolCode))] } },
+            select: { code: true },
+          })
+        ).map((symbol) => symbol.code),
+      );
       let inserted = 0;
       for (const row of normalizedRows) {
+        if (!existingSymbols.has(row.symbolCode)) continue;
         const announcedAt = new Date(row.announcedAt);
         if (row.sales === 0 && row.operatingProfit === 0) continue;
         const existing = await prisma.financialResult.findFirst({
@@ -350,13 +378,595 @@ async function runJQuantsIngestion(
   }
 }
 
+// Helpers for Yahoo Finance / yfinance Python Ingestions
+async function getIngestionSymbols(): Promise<string[]> {
+  const configured = process.env.YAHOO_FINANCE_SYMBOLS?.split(',')
+    .map((symbol) => symbol.trim())
+    .filter(Boolean);
+  if (configured && configured.length > 0) return configured;
+
+  const maxSymbols = parseYahooFinanceMaxSymbols(process.env.YAHOO_FINANCE_MAX_SYMBOLS);
+  const rows = await prisma.symbol.findMany({
+    where: { isActive: true },
+    select: { code: true },
+    orderBy: { code: 'asc' },
+    ...(maxSymbols ? { take: maxSymbols } : {}),
+  });
+  return rows.map((row) => row.code);
+}
+
+function mapYahooFinancials(yahooData: any, symbolCode: string): any[] {
+  const incomeHistory = yahooData?.incomeStatementHistory?.incomeStatementHistory || [];
+  const balanceHistory = yahooData?.balanceSheetHistory?.balanceSheetHistory || [];
+  
+  const results: any[] = [];
+  
+  for (let i = 0; i < incomeHistory.length; i++) {
+    const inc = incomeHistory[i];
+    const bal = balanceHistory[i] || {};
+    
+    const announcedAt = inc.endDate;
+    if (!announcedAt) continue;
+    
+    const sales = inc.totalRevenue?.raw || 0;
+    const operatingProfit = inc.operatingIncome?.raw || 0;
+    const ordinaryProfit = operatingProfit;
+    const netIncome = inc.netIncome?.raw || 0;
+    
+    const equity = bal.totalAssets?.raw || bal.netLiabilities?.raw || 0;
+    
+    results.push({
+      symbolCode,
+      announcedAt: new Date(announcedAt),
+      fiscalPeriod: `${new Date(announcedAt).getFullYear()}FY`,
+      sales,
+      operatingProfit,
+      ordinaryProfit,
+      netIncome,
+      salesYoyPct: 0,
+      operatingProfitYoyPct: 0,
+      operatingMarginPct: sales > 0 ? (operatingProfit / sales) * 100 : 0,
+      operatingMarginPrevPct: 0,
+      roePct: equity > 0 ? (netIncome / equity) * 100 : 0,
+      progressRateOpPct: 100,
+      guidanceRevision: 'none',
+      rawJson: { income: inc, balance: bal }
+    });
+  }
+  
+  results.sort((a, b) => a.announcedAt.getTime() - b.announcedAt.getTime());
+  for (let i = 1; i < results.length; i++) {
+    const cur = results[i];
+    const prev = results[i - 1];
+    
+    if (prev.sales > 0) {
+      cur.salesYoyPct = ((cur.sales - prev.sales) / prev.sales) * 100;
+    }
+    if (prev.operatingProfit > 0) {
+      cur.operatingProfitYoyPct = ((cur.operatingProfit - prev.operatingProfit) / prev.operatingProfit) * 100;
+    }
+    cur.operatingMarginPrevPct = prev.operatingMarginPct;
+  }
+  
+  return results;
+}
+
+function mapYFinancePythonFinancials(pyData: any, symbolCode: string): any[] {
+  const fin = pyData?.financials || {};
+  const bal = pyData?.balance_sheet || {};
+  
+  const dates = Object.keys(fin).sort();
+  const results: any[] = [];
+  
+  for (const dateStr of dates) {
+    const inc = fin[dateStr] || {};
+    const bs = bal[dateStr] || {};
+    
+    const sales = inc["Total Revenue"] || inc["Revenue"] || 0;
+    const operatingProfit = inc["Operating Income"] || inc["Operating Profit"] || 0;
+    const ordinaryProfit = operatingProfit;
+    const netIncome = inc["Net Income"] || 0;
+    
+    const equity = bs["Total Assets"] || bs["Stockholders Equity"] || 0;
+    
+    results.push({
+      symbolCode,
+      announcedAt: new Date(dateStr),
+      fiscalPeriod: `${new Date(dateStr).getFullYear()}FY`,
+      sales,
+      operatingProfit,
+      ordinaryProfit,
+      netIncome,
+      salesYoyPct: 0,
+      operatingProfitYoyPct: 0,
+      operatingMarginPct: sales > 0 ? (operatingProfit / sales) * 100 : 0,
+      operatingMarginPrevPct: 0,
+      roePct: equity > 0 ? (netIncome / equity) * 100 : 0,
+      progressRateOpPct: 100,
+      guidanceRevision: 'none',
+      rawJson: { income: inc, balance: bs }
+    });
+  }
+  
+  results.sort((a, b) => a.announcedAt.getTime() - b.announcedAt.getTime());
+  for (let i = 1; i < results.length; i++) {
+    const cur = results[i];
+    const prev = results[i - 1];
+    
+    if (prev.sales > 0) {
+      cur.salesYoyPct = ((cur.sales - prev.sales) / prev.sales) * 100;
+    }
+    if (prev.operatingProfit > 0) {
+      cur.operatingProfitYoyPct = ((cur.operatingProfit - prev.operatingProfit) / prev.operatingProfit) * 100;
+    }
+    cur.operatingMarginPrevPct = prev.operatingMarginPct;
+  }
+  
+  return results;
+}
+
+// Ingestion for Yahoo Finance or yfinance Python
+async function runYahooOrPythonIngestion(
+  runId: string,
+  sourceType: 'yahoo_finance' | 'yfinance_python',
+  datasetName: YahooDatasetName,
+  fromDate?: Date,
+  toDate?: Date,
+): Promise<{ count: number }> {
+  const from = fromDate || new Date();
+  const to = toDate || new Date();
+  
+  const endpoint = `${sourceType}/${datasetName}`;
+  const requestParams = {
+    datasetName,
+    from: from.toISOString().slice(0, 10),
+    to: to.toISOString().slice(0, 10),
+  };
+
+  const provider = sourceType === 'yahoo_finance' 
+    ? new YahooFinanceProvider() 
+    : new YFinancePythonProvider();
+
+  const symbols = await getIngestionSymbols();
+  if (symbols.length === 0) {
+    throw new Error(`${sourceType} ingestion requires active symbols in database.`);
+  }
+
+  let upserted = 0;
+  let failed = 0;
+  const failureExamples: string[] = [];
+  const responsesLog: any[] = [];
+
+  for (const symbol of symbols) {
+    try {
+      let currentSource: 'yahoo_finance' | 'yfinance_python' = sourceType;
+      
+      switch (datasetName) {
+        case 'daily_prices': {
+          let bars: DailyBar[] = [];
+          try {
+            bars = await provider.fetchDailyPrices(symbol, from, to);
+          } catch (err) {
+            if (sourceType === 'yahoo_finance') {
+              console.warn(`[Ingestion] Yahoo Finance daily prices failed for ${symbol}. Retrying with Python yfinance...`, String(err));
+              const fallbackProvider = new YFinancePythonProvider();
+              bars = await fallbackProvider.fetchDailyPrices(symbol, from, to);
+              currentSource = 'yfinance_python';
+            } else {
+              throw err;
+            }
+          }
+          responsesLog.push({ symbol, count: bars.length, source: currentSource });
+          
+          for (const bar of bars) {
+            await prisma.dailyPrice.upsert({
+              where: { symbolCode_date: { symbolCode: symbol, date: new Date(bar.date) } },
+              create: {
+                symbolCode: symbol,
+                date: new Date(bar.date),
+                open: bar.open ?? 0,
+                high: bar.high ?? 0,
+                low: bar.low ?? 0,
+                close: bar.close ?? 0,
+                volume: bar.volume ?? 0,
+                turnoverValue: bar.turnoverValue ?? 0,
+              },
+              update: {
+                open: bar.open ?? 0,
+                high: bar.high ?? 0,
+                low: bar.low ?? 0,
+                close: bar.close ?? 0,
+                volume: bar.volume ?? 0,
+                turnoverValue: bar.turnoverValue ?? 0,
+              },
+            });
+            upserted++;
+          }
+          break;
+        }
+
+        case 'index_prices': {
+          let bars: DailyBar[] = [];
+          try {
+            bars = await provider.fetchIndexDailyPrices(symbol, from, to);
+          } catch (err) {
+            if (sourceType === 'yahoo_finance') {
+              console.warn(`[Ingestion] Yahoo Finance index prices failed for ${symbol}. Retrying with Python yfinance...`, String(err));
+              const fallbackProvider = new YFinancePythonProvider();
+              bars = await fallbackProvider.fetchIndexDailyPrices(symbol, from, to);
+              currentSource = 'yfinance_python';
+            } else {
+              throw err;
+            }
+          }
+          responsesLog.push({ symbol, count: bars.length, source: currentSource });
+
+          for (const bar of bars) {
+            await prisma.indexDailyPrice.upsert({
+              where: { indexCode_date: { indexCode: symbol, date: new Date(bar.date) } },
+              create: {
+                indexCode: symbol,
+                date: new Date(bar.date),
+                open: bar.open ?? 0,
+                high: bar.high ?? 0,
+                low: bar.low ?? 0,
+                close: bar.close ?? 0,
+                volume: bar.volume ?? 0,
+              },
+              update: {
+                open: bar.open ?? 0,
+                high: bar.high ?? 0,
+                low: bar.low ?? 0,
+                close: bar.close ?? 0,
+                volume: bar.volume ?? 0,
+              },
+            });
+            upserted++;
+          }
+          break;
+        }
+
+        case 'dividends': {
+          let divs: any[] = [];
+          try {
+            divs = await provider.fetchDividends(symbol, from, to);
+          } catch (err) {
+            if (sourceType === 'yahoo_finance') {
+              console.warn(`[Ingestion] Yahoo Finance dividends failed for ${symbol}. Retrying with Python yfinance...`, String(err));
+              const fallbackProvider = new YFinancePythonProvider();
+              divs = await fallbackProvider.fetchDividends(symbol, from, to);
+              currentSource = 'yfinance_python';
+            } else {
+              throw err;
+            }
+          }
+          responsesLog.push({ symbol, count: divs.length, source: currentSource });
+
+          for (const div of divs) {
+            await prisma.dividend.create({
+              data: {
+                symbolCode: symbol,
+                exDividendDate: new Date(div.date),
+                dividendPerShare: parseFloat(div.amount) || 0,
+                dividendType: 'unknown',
+                rawJson: div as any,
+              },
+            });
+            upserted++;
+          }
+          break;
+        }
+
+        case 'splits': {
+          let splits: any[] = [];
+          try {
+            splits = await provider.fetchSplits(symbol, from, to);
+          } catch (err) {
+            if (sourceType === 'yahoo_finance') {
+              console.warn(`[Ingestion] Yahoo Finance splits failed for ${symbol}. Retrying with Python yfinance...`, String(err));
+              const fallbackProvider = new YFinancePythonProvider();
+              splits = await fallbackProvider.fetchSplits(symbol, from, to);
+              currentSource = 'yfinance_python';
+            } else {
+              throw err;
+            }
+          }
+          responsesLog.push({ symbol, count: splits.length, source: currentSource });
+
+          for (const split of splits) {
+            let ratio = parseFloat(split.ratio);
+            if (split.ratio.includes(':')) {
+              const parts = split.ratio.split(':');
+              const a = parseFloat(parts[0]);
+              const b = parseFloat(parts[1]);
+              if (a && b) ratio = a / b;
+            }
+            await prisma.corporateAction.create({
+              data: {
+                symbolCode: symbol,
+                actionDate: new Date(split.date),
+                actionType: 'split',
+                splitRatio: ratio || 1,
+                details: split as any,
+              },
+            });
+            upserted++;
+          }
+          break;
+        }
+
+        case 'financial_statements': {
+          let raw: any;
+          try {
+            raw = await provider.fetchFinancialStatements(symbol);
+          } catch (err) {
+            if (sourceType === 'yahoo_finance') {
+              console.warn(`[Ingestion] Yahoo Finance financials failed for ${symbol}. Retrying with Python yfinance...`, String(err));
+              const fallbackProvider = new YFinancePythonProvider();
+              raw = await fallbackProvider.fetchFinancialStatements(symbol);
+              currentSource = 'yfinance_python';
+            } else {
+              throw err;
+            }
+          }
+          responsesLog.push({ symbol, status: 'fetched', source: currentSource });
+
+          const results = currentSource === 'yahoo_finance' 
+            ? mapYahooFinancials(raw, symbol)
+            : mapYFinancePythonFinancials(raw, symbol);
+
+          for (const row of results) {
+            const announcedAt = new Date(row.announcedAt);
+            const existing = await prisma.financialResult.findFirst({
+              where: {
+                symbolCode: row.symbolCode,
+                fiscalPeriod: row.fiscalPeriod,
+                announcedAt: {
+                  gte: new Date(announcedAt.getTime() - 24 * 3600 * 1000),
+                  lte: new Date(announcedAt.getTime() + 24 * 3600 * 1000),
+                },
+              },
+            });
+            if (!existing) {
+              await prisma.financialResult.create({
+                data: row,
+              });
+              upserted++;
+            }
+          }
+          break;
+        }
+
+        case 'earnings_calendar': {
+          let calendar: any;
+          try {
+            calendar = await provider.fetchEarningsCalendar(symbol);
+          } catch (err) {
+            if (sourceType === 'yahoo_finance') {
+              console.warn(`[Ingestion] Yahoo Finance earnings calendar failed for ${symbol}. Retrying with Python yfinance...`, String(err));
+              const fallbackProvider = new YFinancePythonProvider();
+              calendar = await fallbackProvider.fetchEarningsCalendar(symbol);
+              currentSource = 'yfinance_python';
+            } else {
+              throw err;
+            }
+          }
+          responsesLog.push({ symbol, status: 'fetched', source: currentSource });
+
+          const dates = calendar?.calendarEvents?.earnings?.earningsDate || [];
+          for (const d of dates) {
+            if (!d) continue;
+            const scheduledAt = new Date(d);
+            await prisma.earningsCalendar.upsert({
+              where: { symbolCode_scheduledAt: { symbolCode: symbol, scheduledAt } },
+              create: {
+                symbolCode: symbol,
+                scheduledAt,
+                fiscalPeriod: 'unknown',
+                source: currentSource,
+                rawJson: calendar as any,
+              },
+              update: {},
+            });
+            upserted++;
+          }
+          break;
+        }
+      }
+    } catch (err) {
+      failed++;
+      if (failureExamples.length < 5) {
+        failureExamples.push(`${symbol}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  // Save Raw API Run result
+  await saveRawApiSuccess(runId, endpoint, requestParams, responsesLog);
+
+  if (upserted === 0 && failed > 0) {
+    throw new Error(`${sourceType} ${datasetName} failed for all symbols. Examples: ${failureExamples.join('; ')}`);
+  }
+
+  return { count: upserted };
+}
+
+// JPX Ingestion
+async function runJPXIngestion(runId: string): Promise<{ count: number }> {
+  const provider = new JPXListedIssueProvider();
+  const endpoint = 'jpx/listed_issue_master';
+  
+  try {
+    const issues = await provider.importListedIssuesFromUrl(
+      'https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls'
+    );
+    
+    await saveRawApiSuccess(runId, endpoint, {}, { count: issues.length });
+    
+    let upserted = 0;
+    for (const issue of issues) {
+      const existing = await prisma.symbol.findUnique({ where: { code: issue.code } });
+      
+      await prisma.symbol.upsert({
+        where: { code: issue.code },
+        create: {
+          code: issue.code,
+          name: issue.name,
+          market: issue.market,
+          sector: issue.sector,
+          isActive: true,
+        },
+        update: {
+          name: issue.name,
+          market: issue.market,
+          sector: issue.sector,
+        },
+      });
+      
+      await prisma.symbolMasterHistory.create({
+        data: {
+          symbolCode: issue.code,
+          changeDate: new Date(),
+          changeType: existing ? 'update' : 'create',
+          oldValue: existing ? (existing as any) : null,
+          newValue: issue as any,
+          source: 'jpx',
+        },
+      });
+      upserted++;
+    }
+    return { count: upserted };
+  } catch (error) {
+    await saveRawApiFailure(runId, endpoint, {}, error);
+    throw error;
+  }
+}
+
+// EDINET Ingestion
+async function runEdinetIngestion(runId: string, targetDate: Date): Promise<{ count: number }> {
+  const provider = createEdinetProvider();
+  const endpoint = 'edinet/edinet_documents';
+  const requestParams = { date: targetDate.toISOString().slice(0, 10) };
+  
+  try {
+    const list = await provider.fetchDocumentList(targetDate);
+    await saveRawApiSuccess(runId, endpoint, requestParams, list);
+    
+    let inserted = 0;
+    for (const doc of list.results) {
+      if (!doc.secCode) continue;
+      const symbolCode = doc.secCode;
+      
+      await prisma.disclosureDocument.create({
+        data: {
+          symbolCode,
+          disclosureNumber: doc.docId,
+          docId: doc.docId,
+          source: 'edinet',
+          docTypeCode: doc.docTypeCode,
+          docType: provider.classifyEdinetDocument(doc.docTypeCode),
+          title: doc.docDescription || 'EDINET Document',
+          submittedAt: new Date(doc.submitDateTime),
+          periodStart: doc.periodStart ? new Date(doc.periodStart) : null,
+          periodEnd: doc.periodEnd ? new Date(doc.periodEnd) : null,
+          pdfUrl: doc.pdfFlag === '1' ? `https://disclosure2.edinet-fsa.go.jp/api/v2/documents/${doc.docId}?type=2` : null,
+          xbrlUrl: doc.xbrlFlag === '1' ? `https://disclosure2.edinet-fsa.go.jp/api/v2/documents/${doc.docId}?type=1` : null,
+          rawMetaJson: doc as any,
+        },
+      });
+      
+      await prisma.disclosure.create({
+        data: {
+          symbolCode,
+          disclosedAt: new Date(doc.submitDateTime),
+          disclosureType: provider.classifyEdinetDocument(doc.docTypeCode),
+          title: doc.docDescription || 'EDINET Document',
+          summary: `${doc.filerName} が書類を提出しました。種類: ${doc.docDescription}`,
+          rawJson: doc as any,
+        },
+      });
+      inserted++;
+    }
+    return { count: inserted };
+  } catch (error) {
+    await saveRawApiFailure(runId, endpoint, requestParams, error);
+    throw error;
+  }
+}
+// TDnet Ingestion (Free Web API)
+async function runFreeTDnetIngestion(runId: string, fromDate: Date, toDate: Date): Promise<{ count: number }> {
+  const provider = createTDnetProvider();
+  const endpoint = 'tdnet/free_disclosures';
+  const requestParams = {
+    from: fromDate.toISOString().slice(0, 10),
+    to: toDate.toISOString().slice(0, 10),
+  };
+
+  try {
+    const list = await provider.fetchDisclosureIndex(fromDate, toDate);
+    
+    let upserted = 0;
+    const logResponses: any[] = [];
+
+    for (const item of list) {
+      // Check if DisclosureDocument already exists
+      const existingDoc = await prisma.disclosureDocument.findFirst({
+        where: {
+          source: 'tdnet',
+          disclosureNumber: item.disclosureNumber,
+        }
+      });
+
+      if (!existingDoc) {
+        // Create DisclosureDocument
+        await prisma.disclosureDocument.create({
+          data: {
+            symbolCode: item.symbolCode,
+            disclosureNumber: item.disclosureNumber,
+            docId: item.disclosureNumber,
+            source: 'tdnet',
+            docTypeCode: item.category,
+            docType: item.category,
+            title: item.title,
+            submittedAt: new Date(item.submittedAt),
+            pdfUrl: item.pdfUrl || null,
+            rawMetaJson: item as any,
+          }
+        });
+
+        // Create Disclosure
+        await prisma.disclosure.create({
+          data: {
+            symbolCode: item.symbolCode,
+            disclosedAt: new Date(item.submittedAt),
+            disclosureType: item.category,
+            title: item.title,
+            summary: `${item.companyName} が適時開示を提出しました。: ${item.title}`,
+            rawJson: item as any,
+          }
+        });
+
+        logResponses.push({ symbol: item.symbolCode, title: item.title });
+        upserted++;
+      }
+    }
+
+    await saveRawApiSuccess(runId, endpoint, requestParams, logResponses);
+    return { count: upserted };
+  } catch (error) {
+    await saveRawApiFailure(runId, endpoint, requestParams, error);
+    throw error;
+  }
+}
+
+
 export async function dataIngestionRoutes(app: FastifyInstance): Promise<void> {
-  // GET /api/data-ingestion/runs — list recent runs
+  // GET /api/data-ingestion/runs
   app.get<{ Querystring: { limit?: string; status?: string } }>(
     '/api/data-ingestion/runs',
     async (req) => {
       const limit = Math.min(Number(req.query.limit ?? 50), 200);
-      const where = req.query.status ? { status: req.query.status as 'pending' | 'running' | 'completed' | 'failed' | 'skipped' } : {};
+      const where = req.query.status ? { status: req.query.status as any } : {};
       return prisma.dataIngestionRun.findMany({
         where,
         orderBy: { createdAt: 'desc' },
@@ -366,7 +976,7 @@ export async function dataIngestionRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  // GET /api/data-ingestion/runs/:id — run detail
+  // GET /api/data-ingestion/runs/:id
   app.get<{ Params: { id: string } }>('/api/data-ingestion/runs/:id', async (req, reply) => {
     const run = await prisma.dataIngestionRun.findUnique({
       where: { id: req.params.id },
@@ -379,7 +989,7 @@ export async function dataIngestionRoutes(app: FastifyInstance): Promise<void> {
     return run;
   });
 
-  // POST /api/data-ingestion/runs — trigger a new ingestion job
+  // POST /api/data-ingestion/runs
   app.post<{
     Body: {
       sourceType: string;
@@ -392,8 +1002,8 @@ export async function dataIngestionRoutes(app: FastifyInstance): Promise<void> {
     const { sourceType, datasetName, targetDate, fromDate, toDate } = req.body;
 
     const dataSource = await prisma.dataSource.upsert({
-      where: { sourceType: sourceType as 'jquants' | 'tdnet' | 'edinet' | 'kabu_station' | 'csv' | 'seed' },
-      create: { sourceType: sourceType as 'jquants' | 'tdnet' | 'edinet' | 'kabu_station' | 'csv' | 'seed', enabled: true },
+      where: { sourceType: sourceType as SourceType },
+      create: { sourceType: sourceType as SourceType, enabled: true },
       update: {},
     });
 
@@ -409,19 +1019,31 @@ export async function dataIngestionRoutes(app: FastifyInstance): Promise<void> {
       },
     });
 
-    // Execute ingestion asynchronously
     setImmediate(async () => {
       try {
         let result: { count: number };
+        const tDate = targetDate ? new Date(targetDate) : new Date();
+        const fDate = fromDate ? new Date(fromDate) : undefined;
+        const oDate = toDate ? new Date(toDate) : undefined;
+
         if (sourceType === 'jquants') {
-          result = await runJQuantsIngestion(
+          result = await runJQuantsIngestion(run.id, datasetName as DatasetName, tDate);
+        } else if (sourceType === 'yahoo_finance' || sourceType === 'yfinance_python') {
+          result = await runYahooOrPythonIngestion(
             run.id,
-            datasetName as DatasetName,
-            targetDate ? new Date(targetDate) : new Date(),
+            sourceType as any,
+            datasetName as YahooDatasetName,
+            fDate,
+            oDate || tDate,
           );
+        } else if (sourceType === 'jpx') {
+          result = await runJPXIngestion(run.id);
+        } else if (sourceType === 'edinet') {
+          result = await runEdinetIngestion(run.id, tDate);
         } else {
           throw new Error(`Unsupported ingestion source: ${sourceType}`);
         }
+
         await prisma.dataIngestionRun.update({
           where: { id: run.id },
           data: { status: 'completed', finishedAt: new Date(), recordCount: result.count },
@@ -450,10 +1072,131 @@ export async function dataIngestionRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(202).send(run);
   });
 
-  // GET /api/data-ingestion/datasets — list available datasets per source
+  // POST /api/data-bootstrap/free (Data Bootstrap Implementation)
+  app.post<{
+    Body: {
+      marketFilter?: string;
+      maxSymbols?: number;
+      fromDate?: string;
+      toDate?: string;
+      concurrencyLimit?: number;
+      rateLimitMs?: number;
+    };
+  }>('/api/data-bootstrap/free', async (req, reply) => {
+    const { marketFilter, maxSymbols = 10, fromDate, toDate } = req.body;
+    
+    // Execute asynchronously and return a status token or similar
+    setImmediate(async () => {
+      console.log(`[Bootstrap] Starting free bootstrap. Max Symbols: ${maxSymbols}`);
+      
+      const dataSource = await prisma.dataSource.upsert({
+        where: { sourceType: 'jpx' },
+        create: { sourceType: 'jpx', enabled: true },
+        update: {},
+      });
+
+      const run = await prisma.dataIngestionRun.create({
+        data: {
+          dataSourceId: dataSource.id,
+          datasetName: 'bootstrap_free',
+          status: 'running',
+          startedAt: new Date(),
+        },
+      });
+
+      try {
+        // Step 1: Import JPX issues
+        const jpxResult = await runJPXIngestion(run.id);
+        console.log(`[Bootstrap] JPX master imported. Upserted Symbols: ${jpxResult.count}`);
+
+        // Ensure MARKET_INDEX_CODE (GROWTH_MOCK) exists in Symbol table for FK integrity
+        await prisma.symbol.upsert({
+          where: { code: 'GROWTH_MOCK' },
+          create: {
+            code: 'GROWTH_MOCK',
+            name: 'Mid/Small Growth Index (mock)',
+            market: 'INDEX',
+            sector: 'Index',
+            isActive: false,
+            lotSize: 1,
+          },
+          update: {},
+        });
+
+        // Step 2: Fetch all target symbols
+        const filter: any = { isActive: true };
+        if (marketFilter) {
+          filter.market = { contains: marketFilter };
+        }
+        const symbols = await prisma.symbol.findMany({
+          where: filter,
+          select: { code: true },
+          take: maxSymbols,
+        });
+
+        // Configure env overrides for bootstrap run
+        const targetCodes = [...symbols.map(s => s.code), 'GROWTH_MOCK'];
+        process.env.YAHOO_FINANCE_SYMBOLS = targetCodes.join(',');
+
+        const fDate = fromDate ? new Date(fromDate) : new Date(Date.now() - 30 * 24 * 3600 * 1000); // 30 days default
+        const tDate = toDate ? new Date(toDate) : new Date();
+
+        // Step 3: Fetch Yahoo Daily Prices
+        const priceResult = await runYahooOrPythonIngestion(
+          run.id,
+          'yahoo_finance',
+          'daily_prices',
+          fDate,
+          tDate,
+        );
+        console.log(`[Bootstrap] Yahoo daily prices fetched: ${priceResult.count}`);
+
+        // Step 4: Fetch dividends
+        try {
+          await runYahooOrPythonIngestion(run.id, 'yahoo_finance', 'dividends', fDate, tDate);
+        } catch (e) {
+          console.warn('[Bootstrap] Dividends fetch failed, skipped:', String(e));
+        }
+
+        // Step 5: Fetch financial statements
+        try {
+          await runYahooOrPythonIngestion(run.id, 'yahoo_finance', 'financial_statements');
+        } catch (e) {
+          console.warn('[Bootstrap] Financials fetch failed, skipped:', String(e));
+        }
+
+        // Step 6: Fetch free TDnet Disclosures
+        try {
+          const tdnetResult = await runFreeTDnetIngestion(run.id, fDate, tDate);
+          console.log(`[Bootstrap] Free TDnet disclosures fetched: ${tdnetResult.count}`);
+        } catch (e) {
+          console.warn('[Bootstrap] Free TDnet disclosures fetch failed, skipped:', String(e));
+        }
+
+        await prisma.dataIngestionRun.update({
+          where: { id: run.id },
+          data: { status: 'completed', finishedAt: new Date(), recordCount: priceResult.count },
+        });
+      } catch (err) {
+        console.error('[Bootstrap] Failed:', String(err));
+        await prisma.dataIngestionRun.update({
+          where: { id: run.id },
+          data: { status: 'failed', finishedAt: new Date(), errorMessage: String(err) },
+        });
+      }
+    });
+
+    return reply.code(202).send({ message: 'Free bootstrap started successfully' });
+  });
+
+  // GET /api/data-ingestion/datasets
   app.get('/api/data-ingestion/datasets', async () => {
     return {
       jquants: DATASET_NAMES,
+      yahoo_finance: YAHOO_DATASET_NAMES,
+      yfinance_python: YAHOO_DATASET_NAMES,
+      jpx: ['listed_issue_master'],
+      edinet: ['edinet_documents'],
       csv: [
         'symbols',
         'daily_prices',
@@ -464,11 +1207,10 @@ export async function dataIngestionRoutes(app: FastifyInstance): Promise<void> {
         'short_selling',
       ],
       tdnet: [],
-      edinet: [],
     };
   });
 
-  // POST /api/data-ingestion/csv-import — import CSV data
+  // POST /api/data-ingestion/csv-import
   app.post<{
     Body: { datasetName: string; csvContent: string };
   }>('/api/data-ingestion/csv-import', async (req, reply) => {

@@ -13,3 +13,6 @@ packages/db/node_modules/.prisma/
 apps/web/shots/
 apps/web/test-results/
 apps/web/playwright-report/
+
+# MCP / browser debug artifacts
+.playwright-mcp/

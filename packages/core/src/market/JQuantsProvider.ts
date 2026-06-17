@@ -1,11 +1,14 @@
 /**
  * J-Quants API provider for Japanese market data.
  * Docs: https://jpx-jquants.com/
- * Authentication: email/password -> refresh_token -> id_token (24h expiry)
+ * Authentication:
+ * - V2: API key via x-api-key header
+ * - V1: email/password -> refresh_token -> id_token (legacy)
  */
 
 export interface JQuantsConfig {
   baseUrl: string;
+  apiKey?: string;
   email?: string;
   password?: string;
   refreshToken?: string;
@@ -27,6 +30,19 @@ export interface JQuantsListedInfo {
   MarketCodeName: string;
 }
 
+interface JQuantsV2ListedInfo {
+  Code: string;
+  CoName: string;
+  CoNameEn: string;
+  S17: string;
+  S17Nm: string;
+  S33: string;
+  S33Nm: string;
+  ScaleCat: string;
+  Mkt: string;
+  MktNm: string;
+}
+
 export interface JQuantsDailyQuote {
   Date: string;
   Code: string;
@@ -44,6 +60,25 @@ export interface JQuantsDailyQuote {
   AdjustmentLow: number | null;
   AdjustmentClose: number | null;
   AdjustmentVolume: number | null;
+}
+
+interface JQuantsV2DailyQuote {
+  Date: string;
+  Code: string;
+  O: number | null;
+  H: number | null;
+  L: number | null;
+  C: number | null;
+  UL: string;
+  LL: string;
+  Vo: number | null;
+  Va: number | null;
+  AdjFactor: number;
+  AdjO: number | null;
+  AdjH: number | null;
+  AdjL: number | null;
+  AdjC: number | null;
+  AdjVo: number | null;
 }
 
 export interface JQuantsIndexQuote {
@@ -221,6 +256,29 @@ export interface JQuantsInvestorTypeTrading {
   BrokerageBalance: string;
 }
 
+type JQuantsV2Statement = Record<string, string>;
+
+interface JQuantsV2Announcement {
+  Date: string;
+  Code: string;
+  CoName: string;
+  FY: string;
+  SectorNm: string;
+  FQ: string;
+  Section: string;
+}
+
+interface JQuantsV2MarginBalance {
+  Date: string;
+  Code: string;
+  ShortMarginOutstanding: number | string;
+  LongMarginOutstanding: number | string;
+  ShortNegotiableMarginOutstanding: number | string;
+  LongNegotiableMarginOutstanding: number | string;
+  ShortStandardizedMarginOutstanding: number | string;
+  LongStandardizedMarginOutstanding: number | string;
+}
+
 export class JQuantsProvider {
   private idToken: string | undefined;
   private refreshToken: string | undefined;
@@ -232,6 +290,10 @@ export class JQuantsProvider {
     if (this.idToken) {
       this.tokenExpiresAt = Date.now() + 23 * 60 * 60 * 1000;
     }
+  }
+
+  private isV2(): boolean {
+    return !!this.config.apiKey || this.config.baseUrl.includes('/v2');
   }
 
   private async getIdToken(): Promise<string> {
@@ -275,6 +337,11 @@ export class JQuantsProvider {
   }
 
   private async get<T>(path: string, params?: Record<string, string>): Promise<T> {
+    if (this.isV2()) {
+      const rows = await this.getV2Data<unknown>(path, params);
+      return { data: rows } as T;
+    }
+
     const token = await this.getIdToken();
     const url = new URL(`${this.config.baseUrl}${path}`);
     if (params) {
@@ -289,17 +356,66 @@ export class JQuantsProvider {
     return res.json() as Promise<T>;
   }
 
+  private async getV2Data<T>(path: string, params?: Record<string, string>): Promise<T[]> {
+    if (!this.config.apiKey) throw new Error('JQuantsProvider: no valid credentials (set JQUANTS_API_KEY)');
+
+    const rows: T[] = [];
+    let paginationKey: string | undefined;
+    do {
+      const url = new URL(`${this.config.baseUrl}${path}`);
+      if (params) {
+        for (const [k, v] of Object.entries(params)) {
+          if (v !== undefined && v !== '') url.searchParams.set(k, v);
+        }
+      }
+      if (paginationKey) url.searchParams.set('pagination_key', paginationKey);
+
+      const res = await fetch(url.toString(), {
+        headers: { 'x-api-key': this.config.apiKey },
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`JQuants GET ${path} -> ${res.status}: ${text}`);
+      const data = JSON.parse(text) as { data?: T[]; pagination_key?: string };
+      rows.push(...(data.data ?? []));
+      paginationKey = data.pagination_key;
+    } while (paginationKey);
+
+    return rows;
+  }
+
   private toDateStr(date: Date): string {
     return date.toISOString().slice(0, 10).replace(/-/g, '');
   }
 
   async fetchListedIssueMaster(date?: Date): Promise<JQuantsListedInfo[]> {
     const params = date ? { date: this.toDateStr(date) } : undefined;
+    if (this.isV2()) {
+      const rows = await this.getV2Data<JQuantsV2ListedInfo>('/equities/master', params);
+      return rows.map((row) => ({
+        Code: row.Code,
+        CompanyName: row.CoName,
+        CompanyNameEnglish: row.CoNameEn,
+        Sector17Code: row.S17,
+        Sector17CodeName: row.S17Nm,
+        Sector33Code: row.S33,
+        Sector33CodeName: row.S33Nm,
+        ScaleCategory: row.ScaleCat,
+        MarketCode: row.Mkt,
+        MarketCodeName: row.MktNm,
+      }));
+    }
     const data = await this.get<{ info: JQuantsListedInfo[] }>('/listed/info', params);
     return data.info;
   }
 
   async fetchDailyPrices(date: Date): Promise<JQuantsDailyQuote[]> {
+    if (this.isV2()) {
+      const rows = await this.getV2Data<JQuantsV2DailyQuote>(
+        '/equities/bars/daily',
+        { date: this.toDateStr(date) },
+      );
+      return rows.map((row) => this.mapV2DailyQuote(row));
+    }
     const data = await this.get<{ daily_quotes: JQuantsDailyQuote[] }>(
       '/prices/daily_quotes',
       { date: this.toDateStr(date) },
@@ -308,6 +424,13 @@ export class JQuantsProvider {
   }
 
   async fetchDailyPricesRange(from: Date, to: Date): Promise<JQuantsDailyQuote[]> {
+    if (this.isV2()) {
+      const rows = await this.getV2Data<JQuantsV2DailyQuote>(
+        '/equities/bars/daily',
+        { from: this.toDateStr(from), to: this.toDateStr(to) },
+      );
+      return rows.map((row) => this.mapV2DailyQuote(row));
+    }
     const data = await this.get<{ daily_quotes: JQuantsDailyQuote[] }>(
       '/prices/daily_quotes',
       { from: this.toDateStr(from), to: this.toDateStr(to) },
@@ -316,6 +439,13 @@ export class JQuantsProvider {
   }
 
   async fetchDailyPricesByCode(code: string, from: Date, to: Date): Promise<JQuantsDailyQuote[]> {
+    if (this.isV2()) {
+      const rows = await this.getV2Data<JQuantsV2DailyQuote>(
+        '/equities/bars/daily',
+        { code, from: this.toDateStr(from), to: this.toDateStr(to) },
+      );
+      return rows.map((row) => this.mapV2DailyQuote(row));
+    }
     const data = await this.get<{ daily_quotes: JQuantsDailyQuote[] }>(
       '/prices/daily_quotes',
       { code, from: this.toDateStr(from), to: this.toDateStr(to) },
@@ -324,6 +454,10 @@ export class JQuantsProvider {
   }
 
   async fetchIndexDailyPrices(date: Date): Promise<JQuantsIndexQuote[]> {
+    if (this.isV2()) {
+      const rows = await this.getV2Data<JQuantsV2DailyQuote>('/indices/bars/daily', { date: this.toDateStr(date) });
+      return rows.map((row) => this.mapV2IndexQuote(row));
+    }
     const data = await this.get<{ indices: JQuantsIndexQuote[] }>(
       '/indices',
       { date: this.toDateStr(date) },
@@ -332,6 +466,10 @@ export class JQuantsProvider {
   }
 
   async fetchTopixDailyPrices(date: Date): Promise<JQuantsIndexQuote[]> {
+    if (this.isV2()) {
+      const rows = await this.getV2Data<JQuantsV2DailyQuote>('/indices/bars/daily/topix', { date: this.toDateStr(date) });
+      return rows.map((row) => ({ ...this.mapV2IndexQuote(row), Code: 'TOPIX' }));
+    }
     const data = await this.get<{ topix: JQuantsIndexQuote[] }>(
       '/indices/topix',
       { date: this.toDateStr(date) },
@@ -340,6 +478,13 @@ export class JQuantsProvider {
   }
 
   async fetchFinancialStatements(date: Date): Promise<JQuantsStatement[]> {
+    if (this.isV2()) {
+      const rows = await this.getV2Data<JQuantsV2Statement>(
+        '/fins/summary',
+        { date: this.toDateStr(date) },
+      );
+      return rows.map((row) => this.mapV2Statement(row));
+    }
     const data = await this.get<{ statements: JQuantsStatement[] }>(
       '/fins/statements',
       { date: this.toDateStr(date) },
@@ -348,6 +493,10 @@ export class JQuantsProvider {
   }
 
   async fetchFinancialStatementsByCode(code: string): Promise<JQuantsStatement[]> {
+    if (this.isV2()) {
+      const rows = await this.getV2Data<JQuantsV2Statement>('/fins/summary', { code });
+      return rows.map((row) => this.mapV2Statement(row));
+    }
     const data = await this.get<{ statements: JQuantsStatement[] }>(
       '/fins/statements',
       { code },
@@ -356,6 +505,20 @@ export class JQuantsProvider {
   }
 
   async fetchEarningsCalendar(from: Date, to: Date): Promise<JQuantsAnnouncement[]> {
+    if (this.isV2()) {
+      const rows = await this.getV2Data<JQuantsV2Announcement>('/equities/earnings-calendar');
+      return rows
+        .filter((a) => a.Date >= this.toDateStr(from) && a.Date <= this.toDateStr(to))
+        .map((row) => ({
+          Date: row.Date,
+          Code: row.Code,
+          CompanyName: row.CoName,
+          FiscalYear: row.FY,
+          SectorName: row.SectorNm,
+          FiscalQuarter: row.FQ,
+          Section: row.Section,
+        }));
+    }
     const data = await this.get<{ announcement: JQuantsAnnouncement[] }>(
       '/fins/announcement',
     );
@@ -381,6 +544,22 @@ export class JQuantsProvider {
   }
 
   async fetchMarginOutstandings(date: Date): Promise<JQuantsMarginBalance[]> {
+    if (this.isV2()) {
+      const rows = await this.getV2Data<JQuantsV2MarginBalance>(
+        '/markets/margin-interest',
+        { date: this.toDateStr(date) },
+      );
+      return rows.map((row) => ({
+        Date: row.Date,
+        Code: row.Code,
+        ShortMarginTradeVolume: String(row.ShortMarginOutstanding ?? ''),
+        LongMarginTradeVolume: String(row.LongMarginOutstanding ?? ''),
+        ShortNegotiableMarginTradeVolume: String(row.ShortNegotiableMarginOutstanding ?? ''),
+        LongNegotiableMarginTradeVolume: String(row.LongNegotiableMarginOutstanding ?? ''),
+        ShortStandardizedMarginTradeVolume: String(row.ShortStandardizedMarginOutstanding ?? ''),
+        LongStandardizedMarginTradeVolume: String(row.LongStandardizedMarginOutstanding ?? ''),
+      }));
+    }
     const data = await this.get<{ weekly_margin_interest: JQuantsMarginBalance[] }>(
       '/markets/weekly_margin_interest',
       { date: this.toDateStr(date) },
@@ -405,6 +584,9 @@ export class JQuantsProvider {
   }
 
   async fetchBulkCsv(datasetName: string, date?: Date): Promise<string> {
+    if (this.isV2()) {
+      throw new Error('JQuants bulk CSV download is not implemented for V2 yet');
+    }
     const token = await this.getIdToken();
     const url = new URL(`${this.config.baseUrl}/files/download`);
     url.searchParams.set('dataset', datasetName);
@@ -415,11 +597,87 @@ export class JQuantsProvider {
     if (!res.ok) throw new Error(`JQuants bulk CSV ${datasetName} -> ${res.status}`);
     return res.text();
   }
+
+  private mapV2DailyQuote(row: JQuantsV2DailyQuote): JQuantsDailyQuote {
+    return {
+      Date: row.Date,
+      Code: row.Code,
+      Open: row.O,
+      High: row.H,
+      Low: row.L,
+      Close: row.C,
+      UpperLimit: row.UL,
+      LowerLimit: row.LL,
+      Volume: row.Vo,
+      TurnoverValue: row.Va,
+      AdjustmentFactor: row.AdjFactor,
+      AdjustmentOpen: row.AdjO,
+      AdjustmentHigh: row.AdjH,
+      AdjustmentLow: row.AdjL,
+      AdjustmentClose: row.AdjC,
+      AdjustmentVolume: row.AdjVo,
+    };
+  }
+
+  private mapV2IndexQuote(row: JQuantsV2DailyQuote): JQuantsIndexQuote {
+    return {
+      Date: row.Date,
+      Code: row.Code,
+      Open: row.O,
+      High: row.H,
+      Low: row.L,
+      Close: row.C,
+      Volume: row.Vo,
+    };
+  }
+
+  private mapV2Statement(row: JQuantsV2Statement): JQuantsStatement {
+    return {
+      ...(row as unknown as JQuantsStatement),
+      DisclosedDate: row.DiscDate ?? '',
+      DisclosedTime: row.DiscTime ?? '',
+      LocalCode: row.Code ?? '',
+      DisclosureNumber: row.DiscNo ?? '',
+      TypeOfDocument: row.DocType ?? '',
+      TypeOfCurrentPeriod: row.CurPerType ?? '',
+      CurrentPeriodStartDate: row.CurPerSt ?? '',
+      CurrentPeriodEndDate: row.CurPerEn ?? '',
+      CurrentFiscalYearStartDate: row.CurFYSt ?? '',
+      CurrentFiscalYearEndDate: row.CurFYEn ?? '',
+      NextFiscalYearStartDate: row.NxtFYSt ?? '',
+      NextFiscalYearEndDate: row.NxtFYEn ?? '',
+      NetSales: row.Sales ?? '',
+      OperatingProfit: row.OP ?? '',
+      OrdinaryProfit: row.OdP ?? '',
+      Profit: row.NP ?? '',
+      EarningsPerShare: row.EPS ?? '',
+      DilutedEarningsPerShare: row.DEPS ?? '',
+      TotalAssets: row.TA ?? '',
+      Equity: row.Eq ?? '',
+      EquityToAssetRatio: row.EqAR ?? '',
+      BookValuePerShare: row.BPS ?? '',
+      CashFlowsFromOperatingActivities: row.CFO ?? '',
+      CashFlowsFromInvestingActivities: row.CFI ?? '',
+      CashFlowsFromFinancingActivities: row.CFF ?? '',
+      CashAndEquivalents: row.CashEq ?? '',
+      ForecastNetSales: row.FSales ?? '',
+      ForecastOperatingProfit: row.FOP ?? '',
+      ForecastOrdinaryProfit: row.FOdP ?? '',
+      ForecastProfit: row.FNP ?? '',
+      ForecastEarningsPerShare: row.FEPS ?? '',
+      ForecastNonConsolidatedNetSales: row.FNCSales ?? '',
+      ForecastNonConsolidatedOperatingProfit: row.FNCOP ?? '',
+      ForecastNonConsolidatedOrdinaryProfit: row.FNCOdP ?? '',
+      ForecastNonConsolidatedProfit: row.FNCNP ?? '',
+      ForecastNonConsolidatedEarningsPerShare: row.FNCEPS ?? '',
+    };
+  }
 }
 
 export function createJQuantsProvider(env: NodeJS.ProcessEnv = process.env): JQuantsProvider | null {
   const plan = (env.JQUANTS_PLAN ?? 'free') as 'free' | 'standard' | 'premium';
   const hasCredentials =
+    env.JQUANTS_API_KEY ||
     (env.JQUANTS_EMAIL && env.JQUANTS_PASSWORD) ||
     env.JQUANTS_REFRESH_TOKEN ||
     env.JQUANTS_ID_TOKEN;
@@ -427,7 +685,8 @@ export function createJQuantsProvider(env: NodeJS.ProcessEnv = process.env): JQu
   if (!hasCredentials) return null;
 
   return new JQuantsProvider({
-    baseUrl: env.JQUANTS_BASE_URL ?? 'https://api.jquants.com/v1',
+    baseUrl: env.JQUANTS_BASE_URL ?? (env.JQUANTS_API_KEY ? 'https://api.jquants.com/v2' : 'https://api.jquants.com/v1'),
+    apiKey: env.JQUANTS_API_KEY,
     email: env.JQUANTS_EMAIL,
     password: env.JQUANTS_PASSWORD,
     refreshToken: env.JQUANTS_REFRESH_TOKEN,

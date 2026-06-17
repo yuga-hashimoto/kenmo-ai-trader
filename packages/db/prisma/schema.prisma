@@ -478,6 +478,9 @@ model AuditLog {
 
 enum DataSourceType {
   jquants
+  yahoo_finance
+  yfinance_python
+  jpx
   tdnet
   edinet
   kabu_station

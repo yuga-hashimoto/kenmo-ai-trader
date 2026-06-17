@@ -19,7 +19,7 @@ interface IngestionRun {
   dataSource: { sourceType: string };
 }
 
-type DatasetMap = Record<'jquants' | 'csv' | 'tdnet' | 'edinet', string[]>;
+type DatasetMap = Record<'jquants' | 'yahoo_finance' | 'yfinance_python' | 'jpx' | 'csv' | 'tdnet' | 'edinet', string[]>;
 
 const STATUS_COLORS: Record<string, string> = {
   completed: '#28a745',
@@ -105,6 +105,9 @@ export default function DataIngestionPage() {
             <label>データソース</label>
             <select value={form.sourceType} onChange={(e) => setForm({ ...form, sourceType: e.target.value, datasetName: '' })}>
               <option value="jquants">J-Quants API</option>
+              <option value="yahoo_finance">Yahoo Finance (Node)</option>
+              <option value="yfinance_python">Yahoo Finance (Python)</option>
+              <option value="jpx">JPX (東証上場銘柄一覧)</option>
               <option value="csv">CSV インポート</option>
               <option value="tdnet">TDnet</option>
               <option value="edinet">EDINET</option>

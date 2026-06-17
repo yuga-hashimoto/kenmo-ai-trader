@@ -15,6 +15,7 @@ import {
   type EvolutionProposalJson,
 } from './schemas.js';
 import { MockHermesAgentClient } from './MockHermesAgentClient.js';
+import { LocalCliHermesAgentClient } from './LocalCliHermesAgentClient.js';
 
 export interface OpenHermesConfig {
   endpoint: string | undefined;
@@ -89,6 +90,13 @@ export function createHermesAgentClient(env: NodeJS.ProcessEnv = process.env): H
       endpoint: env.HERMES_AGENT_ENDPOINT,
       apiKey: env.HERMES_AGENT_API_KEY,
       model: env.HERMES_AGENT_MODEL,
+    });
+  }
+  if (env.HERMES_MODE === 'local_cli') {
+    return new LocalCliHermesAgentClient({
+      cliPath: env.HERMES_CLI_PATH,
+      model: env.HERMES_AGENT_MODEL,
+      provider: env.HERMES_AGENT_PROVIDER,
     });
   }
   return new MockHermesAgentClient();
