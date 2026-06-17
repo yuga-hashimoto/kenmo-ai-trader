@@ -1,6 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '@kenmo/db';
-import { JQuantsProvider, CsvDataImporter } from '@kenmo/core';
+import type { Prisma } from '@kenmo/db';
+import { createHash } from 'node:crypto';
+import {
+  JQuantsProvider,
+  CsvDataImporter,
+  assertKnownDailyPriceSymbols,
+  normalizeFinancialStatements,
+  type DailyBar,
+} from '@kenmo/core';
 
 const DATASET_NAMES = [
   'listed_issue_master',
@@ -10,19 +18,73 @@ const DATASET_NAMES = [
   'financial_statements',
   'earnings_calendar',
   'dividends',
-  'trading_calendar',
   'margin_outstandings',
-  'short_selling',
-  'investor_type_trading',
 ] as const;
 
 type DatasetName = (typeof DATASET_NAMES)[number];
+
+function responseMeta(payload: unknown): { responseSize: number; responseHash: string; rowCount: number } {
+  const body = JSON.stringify(payload);
+  return {
+    responseSize: Buffer.byteLength(body),
+    responseHash: createHash('sha256').update(body).digest('hex'),
+    rowCount: Array.isArray(payload) ? payload.length : 1,
+  };
+}
+
+async function saveRawApiSuccess(
+  runId: string,
+  endpoint: string,
+  requestParams: Record<string, unknown>,
+  payload: unknown,
+): Promise<void> {
+  await prisma.rawApiResponse.create({
+    data: {
+      ingestionRunId: runId,
+      endpoint,
+      requestParams: requestParams as Prisma.InputJsonValue,
+      statusCode: 200,
+      ...responseMeta(payload),
+    },
+  });
+}
+
+async function saveRawApiFailure(
+  runId: string,
+  endpoint: string,
+  requestParams: Record<string, unknown>,
+  error: unknown,
+): Promise<void> {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const status = errorMessage.match(/->\s*(\d{3})/)?.[1];
+  await prisma.rawApiResponse.create({
+    data: {
+      ingestionRunId: runId,
+      endpoint,
+      requestParams: requestParams as Prisma.InputJsonValue,
+      statusCode: status ? Number(status) : null,
+      errorMessage,
+    },
+  });
+}
+
+async function assertDailyPriceSymbolsExist(rows: DailyBar[]): Promise<void> {
+  const codes = [...new Set(rows.map((r) => r.symbolCode).filter(Boolean))];
+  if (codes.length === 0) return;
+  const existing = await prisma.symbol.findMany({
+    where: { code: { in: codes } },
+    select: { code: true },
+  });
+  assertKnownDailyPriceSymbols(rows, existing.map((s) => s.code));
+}
 
 async function runJQuantsIngestion(
   runId: string,
   datasetName: DatasetName,
   targetDate: Date,
 ): Promise<{ count: number }> {
+  const endpoint = `jquants/${datasetName}`;
+  const requestParams = { date: targetDate.toISOString().slice(0, 10) };
   const provider = new JQuantsProvider({
     baseUrl: process.env.JQUANTS_BASE_URL ?? 'https://api.jquants.com/v1',
     email: process.env.JQUANTS_EMAIL,
@@ -33,18 +95,11 @@ async function runJQuantsIngestion(
     enableAddons: process.env.JQUANTS_ENABLE_ADDONS === 'true',
   });
 
-  await prisma.rawApiResponse.create({
-    data: {
-      ingestionRunId: runId,
-      endpoint: `jquants/${datasetName}`,
-      requestParams: { date: targetDate.toISOString().slice(0, 10) },
-      statusCode: 200,
-    },
-  });
-
-  switch (datasetName) {
+  try {
+    switch (datasetName) {
     case 'listed_issue_master': {
       const rows = await provider.fetchListedIssueMaster(targetDate);
+      await saveRawApiSuccess(runId, endpoint, requestParams, rows);
       let upserted = 0;
       for (const row of rows) {
         await prisma.symbol.upsert({
@@ -69,6 +124,19 @@ async function runJQuantsIngestion(
 
     case 'daily_prices': {
       const rows = await provider.fetchDailyPrices(targetDate);
+      await saveRawApiSuccess(runId, endpoint, requestParams, rows);
+      await assertDailyPriceSymbolsExist(
+        rows.map((row) => ({
+          symbolCode: row.Code,
+          date: row.Date,
+          open: row.AdjustmentOpen ?? row.Open ?? 0,
+          high: row.AdjustmentHigh ?? row.High ?? 0,
+          low: row.AdjustmentLow ?? row.Low ?? 0,
+          close: row.AdjustmentClose ?? row.Close ?? 0,
+          volume: row.AdjustmentVolume ?? row.Volume ?? 0,
+          turnoverValue: row.TurnoverValue ?? 0,
+        })),
+      );
       let upserted = 0;
       for (const row of rows) {
         if (row.Close == null) continue;
@@ -100,6 +168,7 @@ async function runJQuantsIngestion(
 
     case 'index_prices': {
       const rows = await provider.fetchIndexDailyPrices(targetDate);
+      await saveRawApiSuccess(runId, endpoint, requestParams, rows);
       let upserted = 0;
       for (const row of rows) {
         if (row.Close == null) continue;
@@ -129,6 +198,7 @@ async function runJQuantsIngestion(
 
     case 'topix_prices': {
       const rows = await provider.fetchTopixDailyPrices(targetDate);
+      await saveRawApiSuccess(runId, endpoint, requestParams, rows);
       let upserted = 0;
       for (const row of rows) {
         if (row.Close == null) continue;
@@ -158,37 +228,37 @@ async function runJQuantsIngestion(
 
     case 'financial_statements': {
       const rows = await provider.fetchFinancialStatements(targetDate);
+      await saveRawApiSuccess(runId, endpoint, requestParams, rows);
+      const normalizedRows = normalizeFinancialStatements(rows);
       let inserted = 0;
-      for (const row of rows) {
-        const announcedAt = new Date(`${row.DisclosedDate}T${row.DisclosedTime ?? '15:30'}+09:00`);
-        const sales = parseFloat(row.NetSales) || 0;
-        const opProfit = parseFloat(row.OperatingProfit) || 0;
-        if (sales === 0 && opProfit === 0) continue;
+      for (const row of normalizedRows) {
+        const announcedAt = new Date(row.announcedAt);
+        if (row.sales === 0 && row.operatingProfit === 0) continue;
         const existing = await prisma.financialResult.findFirst({
           where: {
-            symbolCode: row.LocalCode,
-            fiscalPeriod: row.TypeOfCurrentPeriod,
+            symbolCode: row.symbolCode,
+            fiscalPeriod: row.fiscalPeriod,
             announcedAt: { gte: new Date(announcedAt.getTime() - 3_600_000), lte: new Date(announcedAt.getTime() + 3_600_000) },
           },
         });
         if (!existing) {
           await prisma.financialResult.create({
             data: {
-              symbolCode: row.LocalCode,
+              symbolCode: row.symbolCode,
               announcedAt,
-              fiscalPeriod: row.TypeOfCurrentPeriod,
-              sales,
-              operatingProfit: opProfit,
-              ordinaryProfit: parseFloat(row.OrdinaryProfit) || 0,
-              netIncome: parseFloat(row.Profit) || 0,
-              salesYoyPct: 0,
-              operatingProfitYoyPct: 0,
-              operatingMarginPct: sales > 0 ? (opProfit / sales) * 100 : 0,
-              operatingMarginPrevPct: 0,
-              roePct: 0,
-              progressRateOpPct: 0,
-              guidanceRevision: 'none',
-              rawJson: row as unknown as Record<string, unknown>,
+              fiscalPeriod: row.fiscalPeriod,
+              sales: row.sales,
+              operatingProfit: row.operatingProfit,
+              ordinaryProfit: row.ordinaryProfit,
+              netIncome: row.netIncome,
+              salesYoyPct: row.salesYoyPct,
+              operatingProfitYoyPct: row.operatingProfitYoyPct,
+              operatingMarginPct: row.operatingMarginPct,
+              operatingMarginPrevPct: row.operatingMarginPrevPct,
+              roePct: row.roePct,
+              progressRateOpPct: row.progressRateOpPct,
+              guidanceRevision: row.guidanceRevision,
+              rawJson: row.rawJson as unknown as Prisma.InputJsonValue,
             },
           });
           inserted++;
@@ -203,6 +273,7 @@ async function runJQuantsIngestion(
       const to = new Date(targetDate);
       to.setDate(to.getDate() + 30);
       const rows = await provider.fetchEarningsCalendar(from, to);
+      await saveRawApiSuccess(runId, endpoint, { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) }, rows);
       let upserted = 0;
       for (const row of rows) {
         await prisma.earningsCalendar.upsert({
@@ -212,11 +283,11 @@ async function runJQuantsIngestion(
             scheduledAt: new Date(row.Date),
             fiscalPeriod: row.FiscalQuarter,
             source: 'jquants',
-            rawJson: row as unknown as Record<string, unknown>,
+            rawJson: row as unknown as Prisma.InputJsonValue,
           },
           update: {
             fiscalPeriod: row.FiscalQuarter,
-            rawJson: row as unknown as Record<string, unknown>,
+            rawJson: row as unknown as Prisma.InputJsonValue,
           },
         });
         upserted++;
@@ -226,6 +297,7 @@ async function runJQuantsIngestion(
 
     case 'dividends': {
       const rows = await provider.fetchDividends(targetDate);
+      await saveRawApiSuccess(runId, endpoint, requestParams, rows);
       let inserted = 0;
       for (const row of rows) {
         const annualDiv = parseFloat(row.AnnualDividend) || 0;
@@ -236,7 +308,7 @@ async function runJQuantsIngestion(
             announcedAt: new Date(row.AnnouncementDate),
             dividendPerShare: annualDiv,
             dividendType: 'annual',
-            rawJson: row as unknown as Record<string, unknown>,
+            rawJson: row as unknown as Prisma.InputJsonValue,
           },
         });
         inserted++;
@@ -246,6 +318,7 @@ async function runJQuantsIngestion(
 
     case 'margin_outstandings': {
       const rows = await provider.fetchMarginOutstandings(targetDate);
+      await saveRawApiSuccess(runId, endpoint, requestParams, rows);
       let upserted = 0;
       for (const row of rows) {
         await prisma.marginOutstanding.upsert({
@@ -255,12 +328,12 @@ async function runJQuantsIngestion(
             date: new Date(row.Date),
             marginBuyQty: parseFloat(row.LongMarginTradeVolume) || null,
             marginSellQty: parseFloat(row.ShortMarginTradeVolume) || null,
-            rawJson: row as unknown as Record<string, unknown>,
+            rawJson: row as unknown as Prisma.InputJsonValue,
           },
           update: {
             marginBuyQty: parseFloat(row.LongMarginTradeVolume) || null,
             marginSellQty: parseFloat(row.ShortMarginTradeVolume) || null,
-            rawJson: row as unknown as Record<string, unknown>,
+            rawJson: row as unknown as Prisma.InputJsonValue,
           },
         });
         upserted++;
@@ -269,7 +342,11 @@ async function runJQuantsIngestion(
     }
 
     default:
-      return { count: 0 };
+      throw new Error(`Unsupported J-Quants dataset: ${datasetName}`);
+    }
+  } catch (error) {
+    await saveRawApiFailure(runId, endpoint, requestParams, error);
+    throw error;
   }
 }
 
@@ -335,13 +412,15 @@ export async function dataIngestionRoutes(app: FastifyInstance): Promise<void> {
     // Execute ingestion asynchronously
     setImmediate(async () => {
       try {
-        let result = { count: 0 };
+        let result: { count: number };
         if (sourceType === 'jquants') {
           result = await runJQuantsIngestion(
             run.id,
             datasetName as DatasetName,
             targetDate ? new Date(targetDate) : new Date(),
           );
+        } else {
+          throw new Error(`Unsupported ingestion source: ${sourceType}`);
         }
         await prisma.dataIngestionRun.update({
           where: { id: run.id },
@@ -384,8 +463,8 @@ export async function dataIngestionRoutes(app: FastifyInstance): Promise<void> {
         'margin',
         'short_selling',
       ],
-      tdnet: ['disclosure_index'],
-      edinet: ['document_list'],
+      tdnet: [],
+      edinet: [],
     };
   });
 
@@ -414,6 +493,7 @@ export async function dataIngestionRoutes(app: FastifyInstance): Promise<void> {
       }
       case 'daily_prices': {
         const rows = CsvDataImporter.importDailyPricesCsv(csvContent);
+        await assertDailyPriceSymbolsExist(rows);
         for (const row of rows) {
           await prisma.dailyPrice.upsert({
             where: { symbolCode_date: { symbolCode: row.symbolCode, date: new Date(row.date) } },

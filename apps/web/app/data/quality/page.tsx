@@ -124,21 +124,23 @@ export default function DataQualityPage() {
         </p>
       )}
 
-      <Card title="品質チェック実行" style={{ marginBottom: 16 }}>
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div className="field" style={{ margin: 0 }}>
-            <label style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>開始日</label>
-            <input type="date" value={dateRange.from} onChange={(e) => setDateRange({ ...dateRange, from: e.target.value })} />
+      <div style={{ marginBottom: 16 }}>
+        <Card title="品質チェック実行">
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div className="field" style={{ margin: 0 }}>
+              <label style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>開始日</label>
+              <input type="date" value={dateRange.from} onChange={(e) => setDateRange({ ...dateRange, from: e.target.value })} />
+            </div>
+            <div className="field" style={{ margin: 0 }}>
+              <label style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>終了日</label>
+              <input type="date" value={dateRange.to} onChange={(e) => setDateRange({ ...dateRange, to: e.target.value })} />
+            </div>
+            <button onClick={runCheck} disabled={checking}>
+              {checking ? 'チェック中…' : 'チェック実行'}
+            </button>
           </div>
-          <div className="field" style={{ margin: 0 }}>
-            <label style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>終了日</label>
-            <input type="date" value={dateRange.to} onChange={(e) => setDateRange({ ...dateRange, to: e.target.value })} />
-          </div>
-          <button onClick={runCheck} disabled={checking}>
-            {checking ? 'チェック中…' : 'チェック実行'}
-          </button>
-        </div>
-      </Card>
+        </Card>
+      </div>
 
       {report && (
         <>

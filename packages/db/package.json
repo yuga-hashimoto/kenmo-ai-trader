@@ -10,6 +10,7 @@
   },
   "scripts": {
     "generate": "prisma generate",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "migrate": "prisma migrate dev --name init",
     "push": "prisma db push",
     "seed": "tsx prisma/seed.ts",

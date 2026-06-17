@@ -535,6 +535,9 @@ model RawApiResponse {
   requestParams  Json?
   responseSize   Int?
   statusCode     Int?
+  rowCount       Int?
+  responseHash   String?
+  errorMessage   String?
   fetchedAt      DateTime @default(now())
 
   ingestionRun DataIngestionRun @relation(fields: [ingestionRunId], references: [id], onDelete: Cascade)

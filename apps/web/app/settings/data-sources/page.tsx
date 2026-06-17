@@ -55,8 +55,8 @@ function EnvStatusSection({ sourceType, envStatus }: { sourceType: string; envSt
     return (
       <div style={{ marginTop: 8 }}>
         <EnvBadge ok={!!envStatus.hasCredentials} label={envStatus.hasCredentials ? '認証情報あり' : '認証情報なし'} />
-        <EnvBadge ok={true} label={`プラン: ${envStatus.plan ?? 'free'}`} />
-        {envStatus.addonsEnabled && <EnvBadge ok={true} label="Add-on有効" />}
+        <EnvBadge ok={true} label={`プラン: ${String(envStatus.plan ?? 'free')}`} />
+        {Boolean(envStatus.addonsEnabled) && <EnvBadge ok={true} label="Add-on有効" />}
       </div>
     );
   }

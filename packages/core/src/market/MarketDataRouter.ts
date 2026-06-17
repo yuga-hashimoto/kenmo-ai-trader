@@ -1,9 +1,10 @@
 /**
  * MarketDataRouter — selects the appropriate data provider based on trading mode.
  * Priority rules (from spec):
- *   Backtest: PostgreSQL cached > JQuantsProvider > CsvProvider > SeedProvider
- *   Paper:    BrokerQuoteProvider > JQuantsProvider > cached latest
- *   Disclosure: JQuantsTDnetProvider > TDnetProvider > EdinetProvider > CsvProvider > SeedProvider
+ *   Backtest: PostgreSQL cached data > Seed/Csv fallback.
+ *   Paper:    BrokerQuoteProvider > PostgreSQL cached latest.
+ *   Ingestion: JQuants/TDnet/EDINET/CSV write DB cache first; Strategy Engine
+ *   reads through MarketDataProvider and does not call external APIs directly.
  */
 
 import type { MarketDataProvider } from './MarketDataProvider.js';

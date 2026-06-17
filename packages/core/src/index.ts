@@ -39,6 +39,7 @@ export * from './market/EdinetProvider.js';
 export * from './market/BrokerQuoteProvider.js';
 export * from './market/CsvDataImporter.js';
 export * from './market/MarketDataRouter.js';
+export * from './market/financialNormalization.js';
 
 // Services
 export * from './services/DataQualityService.js';

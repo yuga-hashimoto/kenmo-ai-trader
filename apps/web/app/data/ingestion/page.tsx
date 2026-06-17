@@ -19,12 +19,7 @@ interface IngestionRun {
   dataSource: { sourceType: string };
 }
 
-interface DatasetMap {
-  jquants: string[];
-  csv: string[];
-  tdnet: string[];
-  edinet: string[];
-}
+type DatasetMap = Record<'jquants' | 'csv' | 'tdnet' | 'edinet', string[]>;
 
 const STATUS_COLORS: Record<string, string> = {
   completed: '#28a745',
@@ -94,7 +89,7 @@ export default function DataIngestionPage() {
 
   const availableDatasets =
     datasets && form.sourceType in datasets
-      ? (datasets as Record<string, string[]>)[form.sourceType] ?? []
+      ? datasets[form.sourceType as keyof DatasetMap] ?? []
       : [];
 
   if (loading && runs.length === 0) return <p className="muted">読み込み中…</p>;
@@ -149,7 +144,7 @@ export default function DataIngestionPage() {
             </div>
           )}
 
-          <button onClick={triggerRun} style={{ marginTop: 8 }}>
+          <button onClick={triggerRun} disabled={!form.datasetName} style={{ marginTop: 8 }}>
             {form.sourceType === 'csv' ? 'CSVインポート' : 'ジョブ実行'}
           </button>
 
@@ -172,8 +167,9 @@ export default function DataIngestionPage() {
         </Card>
       </div>
 
-      <Card title={`実行履歴 (${runs.length}件)`} style={{ marginTop: 16 }}>
-        <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+      <div style={{ marginTop: 16 }}>
+        <Card title={`実行履歴 (${runs.length}件)`}>
+          <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ borderBottom: '2px solid #dee2e6' }}>
               <th style={{ textAlign: 'left', padding: '4px 8px' }}>ソース</th>
@@ -211,9 +207,10 @@ export default function DataIngestionPage() {
               </tr>
             ))}
           </tbody>
-        </table>
-        {runs.length === 0 && <p className="muted">まだジョブがありません</p>}
-      </Card>
+          </table>
+          {runs.length === 0 && <p className="muted">まだジョブがありません</p>}
+        </Card>
+      </div>
     </div>
   );
 }

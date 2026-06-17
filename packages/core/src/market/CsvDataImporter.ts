@@ -5,6 +5,7 @@
 
 import type { DailyBar, FinancialResultData, DisclosureData, SymbolData } from '../types/index.js';
 import type { GuidanceRevision } from '../types/index.js';
+import { parse } from 'csv-parse/sync';
 
 export interface ImportedSymbol extends SymbolData {}
 
@@ -36,6 +37,16 @@ export interface ImportedShortSellingRow {
 }
 
 export class CsvDataImporter {
+  private static parseRows(csv: string): string[][] {
+    return parse(csv, {
+      bom: true,
+      columns: false,
+      relaxColumnCount: true,
+      skipEmptyLines: true,
+      trim: false,
+    }) as string[][];
+  }
+
   private static parseNum(s: string | undefined): number | undefined {
     if (!s || s.trim() === '' || s.trim() === '-') return undefined;
     return Number(s.trim());
@@ -47,11 +58,9 @@ export class CsvDataImporter {
   }
 
   static importSymbolsCsv(csv: string): ImportedSymbol[] {
-    const lines = csv.trim().split(/\r?\n/).slice(1);
-    return lines
-      .filter((l) => l.trim())
-      .map((l) => {
-        const cols = l.split(',');
+    const rows = CsvDataImporter.parseRows(csv).slice(1);
+    return rows
+      .map((cols) => {
         return {
           code: cols[0]?.trim() ?? '',
           name: cols[1]?.trim() ?? '',
@@ -66,11 +75,9 @@ export class CsvDataImporter {
   }
 
   static importDailyPricesCsv(csv: string): DailyBar[] {
-    const lines = csv.trim().split(/\r?\n/).slice(1);
-    return lines
-      .filter((l) => l.trim())
-      .map((l) => {
-        const cols = l.split(',');
+    const rows = CsvDataImporter.parseRows(csv).slice(1);
+    return rows
+      .map((cols) => {
         return {
           symbolCode: cols[0]?.trim() ?? '',
           date: CsvDataImporter.parseDate(cols[1]),
@@ -86,11 +93,9 @@ export class CsvDataImporter {
   }
 
   static importFinancialStatementsCsv(csv: string): FinancialResultData[] {
-    const lines = csv.trim().split(/\r?\n/).slice(1);
-    return lines
-      .filter((l) => l.trim())
-      .map((l) => {
-        const cols = l.split(',');
+    const rows = CsvDataImporter.parseRows(csv).slice(1);
+    return rows
+      .map((cols) => {
         const guidanceRaw = cols[13]?.trim() ?? 'none';
         const guidanceRevision: GuidanceRevision =
           guidanceRaw === 'up' || guidanceRaw === 'down' ? guidanceRaw : 'none';
@@ -115,11 +120,9 @@ export class CsvDataImporter {
   }
 
   static importDisclosuresCsv(csv: string): DisclosureData[] {
-    const lines = csv.trim().split(/\r?\n/).slice(1);
-    return lines
-      .filter((l) => l.trim())
-      .map((l) => {
-        const cols = l.split(',');
+    const rows = CsvDataImporter.parseRows(csv).slice(1);
+    return rows
+      .map((cols) => {
         return {
           symbolCode: cols[0]?.trim() ?? '',
           disclosedAt: CsvDataImporter.parseDate(cols[1]),
@@ -132,11 +135,9 @@ export class CsvDataImporter {
   }
 
   static importIndexPricesCsv(csv: string): ImportedIndexPrice[] {
-    const lines = csv.trim().split(/\r?\n/).slice(1);
-    return lines
-      .filter((l) => l.trim())
-      .map((l) => {
-        const cols = l.split(',');
+    const rows = CsvDataImporter.parseRows(csv).slice(1);
+    return rows
+      .map((cols) => {
         return {
           indexCode: cols[0]?.trim() ?? '',
           date: CsvDataImporter.parseDate(cols[1]),
@@ -151,11 +152,9 @@ export class CsvDataImporter {
   }
 
   static importMarginCsv(csv: string): ImportedMarginRow[] {
-    const lines = csv.trim().split(/\r?\n/).slice(1);
-    return lines
-      .filter((l) => l.trim())
-      .map((l) => {
-        const cols = l.split(',');
+    const rows = CsvDataImporter.parseRows(csv).slice(1);
+    return rows
+      .map((cols) => {
         return {
           symbolCode: cols[0]?.trim() ?? '',
           date: CsvDataImporter.parseDate(cols[1]),
@@ -169,11 +168,9 @@ export class CsvDataImporter {
   }
 
   static importShortSellingCsv(csv: string): ImportedShortSellingRow[] {
-    const lines = csv.trim().split(/\r?\n/).slice(1);
-    return lines
-      .filter((l) => l.trim())
-      .map((l) => {
-        const cols = l.split(',');
+    const rows = CsvDataImporter.parseRows(csv).slice(1);
+    return rows
+      .map((cols) => {
         return {
           symbolCode: cols[0]?.trim() ?? '',
           reportDate: CsvDataImporter.parseDate(cols[1]),
@@ -183,5 +180,18 @@ export class CsvDataImporter {
         };
       })
       .filter((r) => r.symbolCode && r.reportDate);
+  }
+}
+
+export function assertKnownDailyPriceSymbols(rows: DailyBar[], knownCodes: Iterable<string>): void {
+  const codes = [...new Set(rows.map((r) => r.symbolCode).filter(Boolean))];
+  if (codes.length === 0) return;
+  const known = new Set(knownCodes);
+  if (known.size === 0) {
+    throw new Error('daily_prices requires listed_issue_master first. Fetch or import listed_issue_master before daily_prices.');
+  }
+  const missing = codes.filter((code) => !known.has(code));
+  if (missing.length > 0) {
+    throw new Error(`daily_prices contains unknown symbols: ${missing.slice(0, 10).join(', ')}. Fetch listed_issue_master first.`);
   }
 }

@@ -66,27 +66,29 @@ export default function DataSymbolsPage() {
         </div>
       </div>
 
-      <Card title="フィルター" style={{ marginBottom: 16 }}>
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-          <input
-            type="text"
-            placeholder="コード・銘柄名で検索"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ padding: '4px 8px', minWidth: 200 }}
-          />
-          <select value={activeFilter} onChange={(e) => setActiveFilter(e.target.value as 'all' | 'active' | 'inactive')}>
-            <option value="all">全て</option>
-            <option value="active">上場中のみ</option>
-            <option value="inactive">廃止のみ</option>
-          </select>
-          <select value={marketFilter} onChange={(e) => setMarketFilter(e.target.value)}>
-            <option value="">全市場</option>
-            {markets.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
-          <span className="muted" style={{ fontSize: 13 }}>{filtered.length.toLocaleString()}件表示</span>
-        </div>
-      </Card>
+      <div style={{ marginBottom: 16 }}>
+        <Card title="フィルター">
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input
+              type="text"
+              placeholder="コード・銘柄名で検索"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ padding: '4px 8px', minWidth: 200 }}
+            />
+            <select value={activeFilter} onChange={(e) => setActiveFilter(e.target.value as 'all' | 'active' | 'inactive')}>
+              <option value="all">全て</option>
+              <option value="active">上場中のみ</option>
+              <option value="inactive">廃止のみ</option>
+            </select>
+            <select value={marketFilter} onChange={(e) => setMarketFilter(e.target.value)}>
+              <option value="">全市場</option>
+              {markets.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <span className="muted" style={{ fontSize: 13 }}>{filtered.length.toLocaleString()}件表示</span>
+          </div>
+        </Card>
+      </div>
 
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>

@@ -229,11 +229,14 @@ export class JQuantsProvider {
   constructor(private readonly config: JQuantsConfig) {
     this.idToken = config.idToken;
     this.refreshToken = config.refreshToken;
+    if (this.idToken) {
+      this.tokenExpiresAt = Date.now() + 23 * 60 * 60 * 1000;
+    }
   }
 
   private async getIdToken(): Promise<string> {
     const now = Date.now();
-    if (this.idToken && now < this.tokenExpiresAt) return this.idToken;
+    if (this.idToken && (this.tokenExpiresAt === 0 || now < this.tokenExpiresAt)) return this.idToken;
 
     if (this.refreshToken) {
       await this.refreshIdToken();

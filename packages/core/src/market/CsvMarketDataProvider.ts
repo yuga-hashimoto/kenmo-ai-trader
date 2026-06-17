@@ -1,5 +1,6 @@
 import type { DailyBar, MarketDataset, SymbolData } from '../types/index.js';
 import { SeedMarketDataProvider, type MarketDataProvider } from './MarketDataProvider.js';
+import { CsvDataImporter } from './CsvDataImporter.js';
 
 /**
  * Parses daily-price CSV text into a dataset and delegates reads to the in-memory
@@ -31,25 +32,7 @@ export class CsvMarketDataProvider implements MarketDataProvider {
   }
 
   static parsePricesCsv(csv: string): DailyBar[] {
-    const lines = csv.trim().split(/\r?\n/);
-    const bars: DailyBar[] = [];
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i];
-      if (!line || line.trim() === '') continue;
-      const cols = line.split(',');
-      if (cols.length < 8) continue;
-      bars.push({
-        symbolCode: cols[0]!.trim(),
-        date: cols[1]!.trim(),
-        open: Number(cols[2]),
-        high: Number(cols[3]),
-        low: Number(cols[4]),
-        close: Number(cols[5]),
-        volume: Number(cols[6]),
-        turnoverValue: Number(cols[7]),
-      });
-    }
-    return bars;
+    return CsvDataImporter.importDailyPricesCsv(csv);
   }
 
   getSymbols = (): ReturnType<MarketDataProvider['getSymbols']> => this.inner.getSymbols();
