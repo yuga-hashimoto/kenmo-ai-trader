@@ -16,6 +16,7 @@ import {
 } from './schemas.js';
 import { MockHermesAgentClient } from './MockHermesAgentClient.js';
 import { LocalCliHermesAgentClient } from './LocalCliHermesAgentClient.js';
+import { OpenAICompatHermesAgentClient } from './OpenAICompatHermesAgentClient.js';
 
 export interface OpenHermesConfig {
   endpoint: string | undefined;
@@ -97,6 +98,14 @@ export function createHermesAgentClient(env: NodeJS.ProcessEnv = process.env): H
       cliPath: env.HERMES_CLI_PATH,
       model: env.HERMES_AGENT_MODEL,
       provider: env.HERMES_AGENT_PROVIDER,
+    });
+  }
+  if (env.HERMES_MODE === 'api') {
+    return new OpenAICompatHermesAgentClient({
+      baseUrl: env.AI_API_BASE_URL,
+      apiKey: env.AI_API_KEY,
+      model: env.AI_API_MODEL,
+      timeoutMs: env.AI_API_TIMEOUT_MS ? Number(env.AI_API_TIMEOUT_MS) : undefined,
     });
   }
   return new MockHermesAgentClient();
