@@ -6,7 +6,7 @@ import { loadMarketDataProvider } from '../../lib/marketData.js';
 import { parseStrategyConfig } from '../../lib/config.js';
 import { getAgent } from '../../lib/agent.js';
 import { persistRunResult } from '../../lib/persist.js';
-import { runDailyStep, catchUpRun } from '../../lib/liveTrading.js';
+import { runDailyStep, catchUpRun, seedBaselineAtLatest } from '../../lib/liveTrading.js';
 import { audit } from '../audit/index.js';
 
 /**
@@ -122,17 +122,31 @@ export async function paperRoutes(app: FastifyInstance): Promise<void> {
   // Mark the run live and catch it up to the latest available market day in the
   // background (the first catch-up over historical days can take a while with a
   // real AI provider, so it is not awaited).
-  app.post<{ Params: { id: string } }>('/api/paper-runs/:id/go-live', async (req, reply) => {
-    const run = await prisma.paperRun.update({
-      where: { id: req.params.id },
-      data: { status: 'running', startedAt: new Date(), stoppedAt: null },
-    });
-    await audit('user', 'paper.go_live', 'PaperRun', run.id, {});
-    void catchUpRun(run.id).catch((err) => {
-      console.error(`[paper] go-live catch-up failed for ${run.id}:`, err);
-    });
-    return reply.send({ ...run, message: 'live trading started; catching up in background' });
-  });
+  // backfill=false (default): a pure forward live test — start flat at the latest
+  // day and only trade new days going forward (no historical replay / mini-backtest).
+  // backfill=true: also replay recent days now to seed some history immediately.
+  app.post<{ Params: { id: string }; Body?: { backfill?: boolean } }>(
+    '/api/paper-runs/:id/go-live',
+    async (req, reply) => {
+      const backfill = req.body?.backfill === true;
+      const run = await prisma.paperRun.update({
+        where: { id: req.params.id },
+        data: { status: 'running', startedAt: new Date(), stoppedAt: null },
+      });
+      await audit('user', 'paper.go_live', 'PaperRun', run.id, { backfill });
+      if (backfill) {
+        void catchUpRun(run.id).catch((err) => {
+          console.error(`[paper] go-live catch-up failed for ${run.id}:`, err);
+        });
+        return reply.send({ ...run, message: 'live trading started; catching up in background' });
+      }
+      const { date } = await seedBaselineAtLatest(run.id);
+      return reply.send({
+        ...run,
+        message: `forward-only live started at ${date ?? 'latest'}; first decision on the next trading day`,
+      });
+    },
+  );
 
   app.post<{ Params: { id: string } }>('/api/paper-runs/:id/pause', setStatus('paused'));
   app.post<{ Params: { id: string } }>('/api/paper-runs/:id/resume', setStatus('running'));

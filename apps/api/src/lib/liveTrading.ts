@@ -174,6 +174,52 @@ export function isCatchingUp(paperRunId: string): boolean {
   return catchingUp.has(paperRunId);
 }
 
+/**
+ * Forward-only start: place a flat baseline (all cash, no positions) as-of the
+ * latest available trading day, WITHOUT replaying any history. The run then only
+ * moves forward — its first decision is the next new day at 15:40. Keeps the live
+ * test purely out-of-sample (no mini-backtest seeded in).
+ */
+export async function seedBaselineAtLatest(paperRunId: string): Promise<{ date: string | null }> {
+  const run = await prisma.paperRun.findUnique({ where: { id: paperRunId } });
+  if (!run) return { date: null };
+  const provider = await loadMarketDataProvider();
+  const dates = await provider.getTradingDates();
+  if (dates.length === 0) return { date: null };
+  const latest = dates[dates.length - 1]!;
+  await prisma.portfolioSnapshot.create({
+    data: {
+      runType: 'paper',
+      paperRunId,
+      snapshotDate: new Date(`${latest}T00:00:00Z`),
+      cashJpy: run.initialCapitalJpy,
+      marketValueJpy: 0,
+      equityJpy: run.initialCapitalJpy,
+      realizedPnlJpy: 0,
+      unrealizedPnlJpy: 0,
+      totalReturnPct: 0,
+      drawdownPct: 0,
+      exposurePct: 0,
+      positionsJson: [],
+    },
+  });
+  await prisma.paperRun.update({
+    where: { id: paperRunId },
+    data: {
+      summaryJson: {
+        finalEquityJpy: run.initialCapitalJpy,
+        totalReturnPct: 0,
+        maxDrawdownPct: 0,
+        winRatePct: 0,
+        tradeCount: 0,
+        lastProcessedDate: latest,
+        initialCapitalJpy: run.initialCapitalJpy,
+      },
+    },
+  });
+  return { date: latest };
+}
+
 /** Catch a run up to the latest available trading day (bounded loop, single-flight). */
 export async function catchUpRun(paperRunId: string, maxDays = 60): Promise<DailyStepResult[]> {
   if (catchingUp.has(paperRunId)) return [];
