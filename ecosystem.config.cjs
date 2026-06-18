@@ -44,5 +44,13 @@ module.exports = {
       max_memory_restart: '2G',
       kill_timeout: 5000,
     },
+    {
+      // Keep the Mac awake so the 15:40 scheduler always fires (Mac mini on AC).
+      name: 'keep-awake',
+      script: '/usr/bin/caffeinate',
+      args: '-dis',
+      interpreter: 'none',
+      autorestart: true,
+    },
   ],
 };
