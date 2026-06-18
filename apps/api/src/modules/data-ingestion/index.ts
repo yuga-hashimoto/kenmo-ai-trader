@@ -960,6 +960,61 @@ async function runFreeTDnetIngestion(runId: string, fromDate: Date, toDate: Date
 }
 
 
+/**
+ * Fetch and upsert the latest daily prices for all active symbols (Yahoo Finance
+ * by default, yfinance-python if configured) and record a DataIngestionRun. Used
+ * by the scheduler to keep market data fresh before each day's live trading, so
+ * the full pipeline (ingest -> screen -> AI decide -> trade) runs unattended.
+ */
+export async function ingestDailyPrices(
+  targetDate: Date = new Date(),
+): Promise<{ count: number; runId: string }> {
+  const sourceType: 'yahoo_finance' | 'yfinance_python' =
+    process.env.MARKET_INGEST_SOURCE === 'yfinance_python' ? 'yfinance_python' : 'yahoo_finance';
+
+  const dataSource = await prisma.dataSource.upsert({
+    where: { sourceType },
+    create: { sourceType, enabled: true },
+    update: {},
+  });
+  const run = await prisma.dataIngestionRun.create({
+    data: {
+      dataSourceId: dataSource.id,
+      datasetName: 'daily_prices',
+      targetDate,
+      status: 'running',
+      startedAt: new Date(),
+    },
+  });
+
+  try {
+    const result = await runYahooOrPythonIngestion(
+      run.id,
+      sourceType,
+      'daily_prices',
+      targetDate,
+      targetDate,
+    );
+    await prisma.dataIngestionRun.update({
+      where: { id: run.id },
+      data: { status: 'completed', finishedAt: new Date(), recordCount: result.count },
+    });
+    await prisma.dataSource.update({
+      where: { id: dataSource.id },
+      data: { lastFetchedAt: new Date(), lastFetchCount: result.count, lastError: null },
+    });
+    return { count: result.count, runId: run.id };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await prisma.dataIngestionRun.update({
+      where: { id: run.id },
+      data: { status: 'failed', finishedAt: new Date(), errorMessage: msg },
+    });
+    await prisma.dataSource.update({ where: { id: dataSource.id }, data: { lastError: msg } });
+    throw err;
+  }
+}
+
 export async function dataIngestionRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/data-ingestion/runs
   app.get<{ Querystring: { limit?: string; status?: string } }>(

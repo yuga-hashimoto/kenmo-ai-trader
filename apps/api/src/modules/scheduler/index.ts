@@ -7,6 +7,7 @@ import {
 } from '@kenmo/core';
 import { audit } from '../audit/index.js';
 import { catchUpRun } from '../../lib/liveTrading.js';
+import { ingestDailyPrices } from '../data-ingestion/index.js';
 
 let scheduler: RealtimeMarketScheduler | null = null;
 let lastEvent: SessionEvent | null = null;
@@ -25,8 +26,25 @@ function triggerLiveTrading(app: FastifyInstance, event: SessionEvent): void {
   if (!TRADE_TRIGGER_EVENTS.has(event.eventType)) return;
   void (async () => {
     const runningPaper = await prisma.paperRun.findMany({ where: { status: 'running' } });
+    if (runningPaper.length === 0) return;
+
+    // 1) Refresh today's market data (close is final after the session) so the
+    //    trading step has fresh bars to screen and trade on.
+    if (process.env.ENABLE_AUTO_INGESTION !== 'false') {
+      try {
+        const { count } = await ingestDailyPrices(new Date(`${event.date}T00:00:00+09:00`));
+        app.log.info({ date: event.date, count }, 'daily prices ingested');
+        await audit('system', 'ingestion.daily_prices', 'DataIngestionRun', null, {
+          date: event.date,
+          count,
+        });
+      } catch (err) {
+        app.log.error({ err }, 'daily price ingestion failed; trading on existing data');
+      }
+    }
+
+    // 2) Advance each running run (single-flight per run).
     for (const run of runningPaper) {
-      // catchUpRun is single-flight per run, so a still-running catch-up is a no-op.
       void catchUpRun(run.id)
         .then((steps) => {
           if (steps.length > 0) {
@@ -83,4 +101,34 @@ export async function schedulerRoutes(app: FastifyInstance): Promise<void> {
     lastEvent,
     nextEvent: scheduler?.nextEvent() ?? null,
   }));
+
+  // Manually run the full daily cycle now (ingest latest prices -> trade every
+  // running paper run). Same path the end-of-day scheduler fires, for testing or
+  // catching up off-hours. Ingestion is awaited; trading runs in the background.
+  app.post<{ Body?: { date?: string; skipIngest?: boolean } }>(
+    '/api/scheduler/run-now',
+    async (req, reply) => {
+      const date = req.body?.date ?? new Date().toISOString().slice(0, 10);
+      let ingested: { count: number; runId: string } | null = null;
+      if (!req.body?.skipIngest && process.env.ENABLE_AUTO_INGESTION !== 'false') {
+        try {
+          ingested = await ingestDailyPrices(new Date(`${date}T00:00:00+09:00`));
+        } catch (err) {
+          app.log.error({ err }, 'run-now ingestion failed');
+        }
+      }
+      const runningPaper = await prisma.paperRun.findMany({ where: { status: 'running' } });
+      for (const run of runningPaper) {
+        void catchUpRun(run.id).catch((err) =>
+          app.log.error({ runId: run.id, err }, 'run-now trading failed'),
+        );
+      }
+      return reply.send({
+        date,
+        ingested,
+        runsTriggered: runningPaper.map((r) => r.id),
+        message: 'ingestion done; trading running in background',
+      });
+    },
+  );
 }
