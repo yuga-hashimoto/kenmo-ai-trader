@@ -160,6 +160,13 @@ export interface BacktestEngineParams {
    * Needs no AI. Without this they only check the close and miss intraday moves.
    */
   intradayRiskExits?: boolean;
+  /**
+   * Capital-aware operation: only show the AI candidates it can actually afford
+   * (price × lot ≤ buying power), and skip the AI call entirely on days where
+   * nothing is affordable AND there are no open positions (nothing to do).
+   * Avoids wasting a call when capital is ~0 and proposing un-buyable names.
+   */
+  capitalAwareCandidates?: boolean;
 }
 
 let __seq = 0;
@@ -246,7 +253,16 @@ export class BacktestEngine {
       const dayCandidates = new Map<string, Candidate>();
 
       for (const plan of scheduleByDate.get(date) ?? []) {
-        const candidates = await provider.getCandidates(decisionDate, config);
+        let candidates = await provider.getCandidates(decisionDate, config);
+        if (this.params.capitalAwareCandidates) {
+          const bp = this.buyingPowerOf(portfolio, priceMap, allowMargin, config);
+          // Keep only names whose minimum lot is affordable with current buying power.
+          candidates = candidates.filter(
+            (c) => c.close * (lotByCode.get(c.symbol) ?? 100) <= bp,
+          );
+          // Broke and flat -> no buy possible and nothing to manage; skip the AI call.
+          if (candidates.length === 0 && portfolio.positions.length === 0) continue;
+        }
         for (const c of candidates) dayCandidates.set(c.symbol, c);
         const ctx = this.buildContext(
           portfolio,
@@ -413,6 +429,18 @@ export class BacktestEngine {
     const m = new Map<string, number>();
     for (const [code, bar] of dayBars) m.set(code, bar.high);
     return m;
+  }
+
+  /** Buying power as-of the decision prices: cash (cash account) or leverage-bounded. */
+  private buyingPowerOf(
+    portfolio: PortfolioState,
+    priceMap: Map<string, number>,
+    allowMargin: boolean,
+    config: StrategyConfig,
+  ): number {
+    if (!allowMargin) return portfolio.cashJpy;
+    const { snapshot } = computeSnapshot(portfolio, '1970-01-01', priceMap);
+    return snapshot.equityJpy * config.risk.maxLeverageIfMarginEnabled - snapshot.marketValueJpy;
   }
 
   private buildContext(

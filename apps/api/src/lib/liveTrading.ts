@@ -119,6 +119,9 @@ export async function runDailyStep(paperRunId: string): Promise<DailyStepResult>
     // Risk exits (stop/take-profit/trailing) trigger on the day's intraday
     // high/low like standing orders — sells are "watched" all day, no AI needed.
     intradayRiskExits: true,
+    // Only consider stocks affordable with current buying power; skip the AI call
+    // when capital is ~0 and nothing is held.
+    capitalAwareCandidates: true,
     promptVersion: strategy.promptVersion,
     modelName: process.env.HERMES_MODE === 'api' ? (process.env.AI_API_MODEL ?? 'api') : 'mock-hermes',
   });
