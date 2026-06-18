@@ -133,15 +133,29 @@ export async function runDailyStep(paperRunId: string): Promise<DailyStepResult>
   };
 }
 
-/** Catch a run up to the latest available trading day (bounded loop). */
+// Runs currently catching up, shared across all callers (go-live, scheduler,
+// manual) so a long AI catch-up can never overlap itself for the same run.
+const catchingUp = new Set<string>();
+
+export function isCatchingUp(paperRunId: string): boolean {
+  return catchingUp.has(paperRunId);
+}
+
+/** Catch a run up to the latest available trading day (bounded loop, single-flight). */
 export async function catchUpRun(paperRunId: string, maxDays = 60): Promise<DailyStepResult[]> {
-  const steps: DailyStepResult[] = [];
-  for (let i = 0; i < maxDays; i++) {
-    const step = await runDailyStep(paperRunId);
-    if (!step.processed) break;
-    steps.push(step);
+  if (catchingUp.has(paperRunId)) return [];
+  catchingUp.add(paperRunId);
+  try {
+    const steps: DailyStepResult[] = [];
+    for (let i = 0; i < maxDays; i++) {
+      const step = await runDailyStep(paperRunId);
+      if (!step.processed) break;
+      steps.push(step);
+    }
+    return steps;
+  } finally {
+    catchingUp.delete(paperRunId);
   }
-  return steps;
 }
 
 /** Recompute the run-level cumulative summary from all persisted snapshots/trades. */

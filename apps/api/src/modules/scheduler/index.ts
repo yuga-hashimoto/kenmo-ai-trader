@@ -10,8 +10,6 @@ import { catchUpRun } from '../../lib/liveTrading.js';
 
 let scheduler: RealtimeMarketScheduler | null = null;
 let lastEvent: SessionEvent | null = null;
-// Runs currently being stepped, so a long AI catch-up never overlaps itself.
-const steppingRuns = new Set<string>();
 
 /** Session events after which the day's market data is final enough to trade on. */
 const TRADE_TRIGGER_EVENTS = new Set(['after_close_analysis']);
@@ -28,16 +26,14 @@ function triggerLiveTrading(app: FastifyInstance, event: SessionEvent): void {
   void (async () => {
     const runningPaper = await prisma.paperRun.findMany({ where: { status: 'running' } });
     for (const run of runningPaper) {
-      if (steppingRuns.has(run.id)) continue;
-      steppingRuns.add(run.id);
+      // catchUpRun is single-flight per run, so a still-running catch-up is a no-op.
       void catchUpRun(run.id)
         .then((steps) => {
           if (steps.length > 0) {
             app.log.info({ runId: run.id, days: steps.length }, 'live trading advanced');
           }
         })
-        .catch((err) => app.log.error({ runId: run.id, err }, 'live trading step failed'))
-        .finally(() => steppingRuns.delete(run.id));
+        .catch((err) => app.log.error({ runId: run.id, err }, 'live trading step failed'));
     }
   })();
 }
