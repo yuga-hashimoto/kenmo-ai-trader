@@ -158,7 +158,14 @@ export async function catchUpRun(paperRunId: string, maxDays = 60): Promise<Dail
   try {
     const steps: DailyStepResult[] = [];
     for (let i = 0; i < maxDays; i++) {
-      const step = await runDailyStep(paperRunId);
+      let step: DailyStepResult;
+      try {
+        step = await runDailyStep(paperRunId);
+      } catch (err) {
+        // One bad day must not silently kill the whole live loop.
+        console.error(`[liveTrading] runDailyStep failed for ${paperRunId}:`, err);
+        break;
+      }
       if (!step.processed) break;
       steps.push(step);
     }

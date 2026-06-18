@@ -128,7 +128,9 @@ export async function paperRoutes(app: FastifyInstance): Promise<void> {
       data: { status: 'running', startedAt: new Date(), stoppedAt: null },
     });
     await audit('user', 'paper.go_live', 'PaperRun', run.id, {});
-    void catchUpRun(run.id).catch(() => undefined);
+    void catchUpRun(run.id).catch((err) => {
+      console.error(`[paper] go-live catch-up failed for ${run.id}:`, err);
+    });
     return reply.send({ ...run, message: 'live trading started; catching up in background' });
   });
 
