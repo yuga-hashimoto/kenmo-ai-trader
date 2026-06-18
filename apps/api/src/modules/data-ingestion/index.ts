@@ -413,8 +413,9 @@ function mapYahooFinancials(yahooData: any, symbolCode: string): any[] {
     const ordinaryProfit = operatingProfit;
     const netIncome = inc.netIncome?.raw || 0;
     
-    const equity = bal.totalAssets?.raw || bal.netLiabilities?.raw || 0;
-    
+    // ROE uses shareholders' equity, NOT total assets (that would be ROA).
+    const equity = bal.totalStockholderEquity?.raw || bal.commonStockEquity?.raw || 0;
+
     results.push({
       symbolCode,
       announcedAt: new Date(announcedAt),
@@ -467,7 +468,12 @@ function mapYFinancePythonFinancials(pyData: any, symbolCode: string): any[] {
     const ordinaryProfit = operatingProfit;
     const netIncome = inc["Net Income"] || 0;
     
-    const equity = bs["Total Assets"] || bs["Stockholders Equity"] || 0;
+    // ROE uses shareholders' equity, NOT total assets (that would be ROA).
+    const equity =
+      bs["Stockholders Equity"] ||
+      bs["Total Equity Gross Minority Interest"] ||
+      bs["Common Stock Equity"] ||
+      0;
     
     results.push({
       symbolCode,
