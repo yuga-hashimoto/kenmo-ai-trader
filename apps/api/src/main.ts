@@ -1,3 +1,4 @@
+import './loadEnv.js';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { ZodError } from 'zod';
