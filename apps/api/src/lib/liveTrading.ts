@@ -112,6 +112,8 @@ export async function runDailyStep(paperRunId: string): Promise<DailyStepResult>
     startDate: date,
     endDate: date,
     initialPortfolio,
+    // Decide on the prior session's data, execute at this day's open (no look-ahead).
+    decideAsOfPriorTradingDay: true,
     promptVersion: strategy.promptVersion,
     modelName: process.env.HERMES_MODE === 'api' ? (process.env.AI_API_MODEL ?? 'api') : 'mock-hermes',
   });

@@ -138,6 +138,13 @@ export interface BacktestEngineParams {
    * so drawdown and holding periods stay continuous across real trading days.
    */
   initialPortfolio?: import('../portfolio/accounting.js').PortfolioState;
+  /**
+   * Realistic timing: make decisions using data only up to the PRIOR trading day
+   * (candidates + valuations as-of T-1) while still executing on day T's bar
+   * (buys at T's open). Removes the look-ahead of deciding on T's close and
+   * filling at T's open — matches an "analyze after close, trade next open" loop.
+   */
+  decideAsOfPriorTradingDay?: boolean;
 }
 
 let __seq = 0;
@@ -171,6 +178,12 @@ export class BacktestEngine {
     const allDates = await provider.getTradingDates();
     const dates = tradingDatesInRange(allDates, this.params.startDate, this.params.endDate);
     const clock = new VirtualClock(dates);
+    // Map each trading day to the one before it (across ALL history, not just the
+    // run window) so realistic-timing runs can decide as-of the prior session.
+    const priorTradingDate = new Map<string, string>();
+    for (let i = 1; i < allDates.length; i++) priorTradingDate.set(allDates[i]!, allDates[i - 1]!);
+    const decisionDateFor = (d: string): string =>
+      this.params.decideAsOfPriorTradingDay ? (priorTradingDate.get(d) ?? d) : d;
     const symbols = await provider.getSymbols();
     const symbolName = new Map(symbols.map((s) => [s.code, s.name]));
     const lotByCode = new Map(symbols.map((s) => [s.code, s.lotSize]));
@@ -202,7 +215,10 @@ export class BacktestEngine {
         const bar = await provider.getDailyPrice(s.code, date);
         if (bar) dayBars.set(s.code, bar);
       }
-      const priceMap = await this.buildPriceMap(symbols.map((s) => s.code), date);
+      // Decisions/valuations are as-of the decision day (T-1 in realistic mode),
+      // while dayBars/fills below stay on the execution day (T).
+      const decisionDate = decisionDateFor(date);
+      const priceMap = await this.buildPriceMap(symbols.map((s) => s.code), decisionDate);
 
       let ordersToday = 0;
       const pendingBuys: Array<{ order: EngineOrderRecord; decision: AgentTradingDecision }> = [];
@@ -214,7 +230,7 @@ export class BacktestEngine {
       const dayCandidates = new Map<string, Candidate>();
 
       for (const plan of scheduleByDate.get(date) ?? []) {
-        const candidates = await provider.getCandidates(date, config);
+        const candidates = await provider.getCandidates(decisionDate, config);
         for (const c of candidates) dayCandidates.set(c.symbol, c);
         const ctx = this.buildContext(
           portfolio,
