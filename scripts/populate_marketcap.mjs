@@ -6,13 +6,18 @@
  *   pnpm --filter @kenmo/db exec node ../../scripts/populate_marketcap.mjs
  * or via tsx from the repo root with DATABASE_URL set.
  */
-import { prisma } from '@kenmo/db';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
 
-const PY = join(dirname(fileURLToPath(import.meta.url)), 'fetch_marketcap.py');
+const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
+const PY = join(SCRIPTS_DIR, 'fetch_marketcap.py');
 const CHUNK = 40;
+// Resolve the generated Prisma client from packages/db (not hoisted to root).
+const require = createRequire(join(SCRIPTS_DIR, '../packages/db/package.json'));
+const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
 
 /** Mirror YFinancePythonProvider.normalizeJapaneseTicker. */
 function toTicker(code) {
