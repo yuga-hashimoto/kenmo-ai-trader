@@ -154,7 +154,36 @@ export async function paperRoutes(app: FastifyInstance): Promise<void> {
     const positions = await prisma.position.findMany({
       where: { paperRunId: run.id, status: 'open' },
     });
-    return reply.send({ ...run, openPositions: positions });
+    // Enrich each holding with the latest price + unrealized P&L for the UI.
+    const names = new Map(
+      (
+        await prisma.symbol.findMany({
+          where: { code: { in: positions.map((p) => p.symbolCode) } },
+          select: { code: true, name: true },
+        })
+      ).map((s) => [s.code, s.name]),
+    );
+    const openPositions = await Promise.all(
+      positions.map(async (p) => {
+        const latest = await prisma.dailyPrice.findFirst({
+          where: { symbolCode: p.symbolCode },
+          orderBy: { date: 'desc' },
+          select: { close: true },
+        });
+        const currentPrice = latest?.close ?? p.avgPrice;
+        const pnlJpy = (currentPrice - p.avgPrice) * p.quantity;
+        const pnlPct = p.avgPrice > 0 ? ((currentPrice - p.avgPrice) / p.avgPrice) * 100 : 0;
+        return {
+          ...p,
+          name: names.get(p.symbolCode) ?? p.symbolCode,
+          currentPrice,
+          marketValueJpy: currentPrice * p.quantity,
+          pnlJpy,
+          pnlPct,
+        };
+      }),
+    );
+    return reply.send({ ...run, openPositions });
   });
 
   app.get<{ Params: { id: string } }>('/api/paper-runs/:id/snapshots', async (req) => {

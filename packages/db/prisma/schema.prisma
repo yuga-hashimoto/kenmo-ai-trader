@@ -107,6 +107,18 @@ model UserSetting {
   updatedAt               DateTime    @updatedAt
 }
 
+/// Human direction handed to the AI. stance + free-text notes are injected into
+/// every trading decision as advisory guidance; the AI's risk rules still bind.
+model HumanDirective {
+  id        String   @id @default(cuid())
+  stance    String   @default("balanced") // cautious | balanced | aggressive
+  text      String   @default("")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@index([active, createdAt])
+}
+
 model StrategyVersion {
   id              String         @id @default(cuid())
   name            String

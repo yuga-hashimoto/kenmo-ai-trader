@@ -15,6 +15,7 @@ import { ablationRoutes } from './modules/ablation/index.js';
 import { dataSourceRoutes } from './modules/data-sources/index.js';
 import { dataIngestionRoutes } from './modules/data-ingestion/index.js';
 import { dataQualityRoutes } from './modules/data-quality/index.js';
+import { guidanceRoutes } from './modules/guidance/index.js';
 
 async function buildServer() {
   const app = Fastify({ logger: true });
@@ -63,6 +64,7 @@ async function buildServer() {
   await app.register(dataSourceRoutes);
   await app.register(dataIngestionRoutes);
   await app.register(dataQualityRoutes);
+  await app.register(guidanceRoutes);
 
   startRealtimeScheduler(app);
 

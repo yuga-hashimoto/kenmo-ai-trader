@@ -58,6 +58,15 @@ export interface AgentPositionView {
   pctOffHighSinceEntry: number | null;
 }
 
+/** Advisory direction from the human operator. The AI should respect it within
+ *  the risk rules — it is guidance, not a command to break discipline. */
+export interface HumanGuidance {
+  /** Overall risk appetite the user picked. */
+  stance: 'cautious' | 'balanced' | 'aggressive';
+  /** Free-text wishes, e.g. "決算前は買わない", "利益は早めに確定". */
+  notes: string;
+}
+
 /** The full context object handed to HermesAgent for every task. */
 export interface AgentTaskContext {
   backtestTime: string;
@@ -68,6 +77,8 @@ export interface AgentTaskContext {
   positions: AgentPositionView[];
   candidates: Candidate[];
   marketRegime: MarketRegime;
+  /** Present when the user has set guidance. */
+  humanGuidance?: HumanGuidance;
 }
 
 /** Single trading decision returned by the agent. */

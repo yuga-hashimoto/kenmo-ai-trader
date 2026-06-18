@@ -103,6 +103,17 @@ export async function runDailyStep(paperRunId: string): Promise<DailyStepResult>
   const provider = await loadMarketDataProvider();
   const initialPortfolio = await reconstructPortfolio(paperRunId, run.initialCapitalJpy);
 
+  // Latest human guidance (stance + notes) -> injected into the AI's decisions.
+  const directive = await prisma.humanDirective.findFirst({ orderBy: { createdAt: 'desc' } });
+  const humanGuidance = directive
+    ? {
+        stance: (['cautious', 'balanced', 'aggressive'].includes(directive.stance)
+          ? directive.stance
+          : 'balanced') as 'cautious' | 'balanced' | 'aggressive',
+        notes: directive.text,
+      }
+    : undefined;
+
   const engine = new BacktestEngine({
     provider,
     agent: getAgent(),
@@ -122,6 +133,8 @@ export async function runDailyStep(paperRunId: string): Promise<DailyStepResult>
     // Only consider stocks affordable with current buying power; skip the AI call
     // when capital is ~0 and nothing is held.
     capitalAwareCandidates: true,
+    // The user's advisory direction (stance + free-text wishes).
+    humanGuidance,
     promptVersion: strategy.promptVersion,
     modelName: process.env.HERMES_MODE === 'api' ? (process.env.AI_API_MODEL ?? 'api') : 'mock-hermes',
   });

@@ -167,6 +167,8 @@ export interface BacktestEngineParams {
    * Avoids wasting a call when capital is ~0 and proposing un-buyable names.
    */
   capitalAwareCandidates?: boolean;
+  /** Advisory direction from the human operator, injected into every decision. */
+  humanGuidance?: import('../types/agent.js').HumanGuidance;
 }
 
 let __seq = 0;
@@ -536,6 +538,7 @@ export class BacktestEngine {
       }),
       candidates,
       marketRegime: this.regimeView(candidates),
+      ...(this.params.humanGuidance ? { humanGuidance: this.params.humanGuidance } : {}),
     };
   }
 
