@@ -1092,8 +1092,9 @@ export async function ingestEdinetDisclosures(
  */
 export async function ingestFinancialsFor(symbols: string[]): Promise<{ count: number } | null> {
   if (symbols.length === 0) return null;
-  const sourceType: 'yahoo_finance' | 'yfinance_python' =
-    process.env.MARKET_INGEST_SOURCE === 'yfinance_python' ? 'yfinance_python' : 'yahoo_finance';
+  // Yahoo's quoteSummary financial modules have returned ~no data since Nov 2024,
+  // so financials always go through the Python yfinance path (fundamentalsTimeSeries).
+  const sourceType: 'yahoo_finance' | 'yfinance_python' = 'yfinance_python';
   const dataSource = await prisma.dataSource.upsert({
     where: { sourceType },
     create: { sourceType, enabled: true },
