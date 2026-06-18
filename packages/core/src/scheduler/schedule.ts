@@ -28,12 +28,26 @@ export interface ScheduledEventPlan {
   sequence: number;
 }
 
+/**
+ * One decision per day. With daily bars every intraday session sees identical
+ * data and produces the same (de-duplicated) answer, so a single
+ * monitor_and_trade event — which may both buy and sell — captures the full day's
+ * trading at 1/8 the AI calls. Used by the live loop. Timed at the open since
+ * that is when the prior-session decision actually executes.
+ */
+export const SINGLE_DAILY_SESSION: VirtualEvent[] = [
+  { virtualTime: '09:00', eventType: 'monitor_and_trade' },
+];
+
 /** Expand a list of trading dates into an ordered list of virtual events. */
-export function generateScheduleForDates(dates: string[]): ScheduledEventPlan[] {
+export function generateScheduleForDates(
+  dates: string[],
+  schedule: VirtualEvent[] = VIRTUAL_DAY_SCHEDULE,
+): ScheduledEventPlan[] {
   const plan: ScheduledEventPlan[] = [];
   let sequence = 0;
   for (const date of dates) {
-    for (const ev of VIRTUAL_DAY_SCHEDULE) {
+    for (const ev of schedule) {
       plan.push({
         eventDate: date,
         virtualTime: ev.virtualTime,

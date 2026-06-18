@@ -13,7 +13,7 @@ import type {
 } from '../types/index.js';
 import type { MarketDataProvider } from '../market/MarketDataProvider.js';
 import { VirtualClock, tradingDatesInRange } from './virtualClock.js';
-import { generateScheduleForDates, toJstIso } from '../scheduler/schedule.js';
+import { generateScheduleForDates, SINGLE_DAILY_SESSION, toJstIso } from '../scheduler/schedule.js';
 import {
   applyBuyFill,
   applySellFill,
@@ -145,6 +145,13 @@ export interface BacktestEngineParams {
    * filling at T's open — matches an "analyze after close, trade next open" loop.
    */
   decideAsOfPriorTradingDay?: boolean;
+  /**
+   * Run a single monitor_and_trade session per day instead of the full 8-event
+   * intraday schedule. With daily bars the 8 sessions see identical data and
+   * yield the same de-duplicated decisions, so one call/day is equivalent at 1/8
+   * the AI cost. Used by the live loop.
+   */
+  singleDailySession?: boolean;
 }
 
 let __seq = 0;
@@ -202,7 +209,8 @@ export class BacktestEngine {
     let prevCloseMap = new Map<string, number>();
 
     const scheduleByDate = new Map<string, ReturnType<typeof generateScheduleForDates>>();
-    for (const plan of generateScheduleForDates(dates)) {
+    const daySchedule = this.params.singleDailySession ? SINGLE_DAILY_SESSION : undefined;
+    for (const plan of generateScheduleForDates(dates, daySchedule)) {
       const arr = scheduleByDate.get(plan.eventDate) ?? [];
       arr.push(plan);
       scheduleByDate.set(plan.eventDate, arr);

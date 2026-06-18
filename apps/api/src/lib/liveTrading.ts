@@ -114,6 +114,8 @@ export async function runDailyStep(paperRunId: string): Promise<DailyStepResult>
     initialPortfolio,
     // Decide on the prior session's data, execute at this day's open (no look-ahead).
     decideAsOfPriorTradingDay: true,
+    // Daily bars => one AI call/day is equivalent to the 8-session schedule.
+    singleDailySession: true,
     promptVersion: strategy.promptVersion,
     modelName: process.env.HERMES_MODE === 'api' ? (process.env.AI_API_MODEL ?? 'api') : 'mock-hermes',
   });
