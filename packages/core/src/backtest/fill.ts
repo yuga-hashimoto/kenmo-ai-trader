@@ -125,6 +125,26 @@ export function simulateLimitSell(
 }
 
 /**
+ * Market-on-close BUY: fills at the day's close + slippage (the closing auction).
+ * Used for live daily entries that are decided after the close — the position is
+ * established AT the close, so on the entry day it shows ≈ no unrealized P&L
+ * (bought ≈ marked). P&L only accrues from the next day.
+ */
+export function simulateCloseBuy(bar: DailyBar, quantity: number, risk: RiskConfig): FillResult {
+  if (quantity <= 0) return NO_FILL;
+  const slipPerShare = (bar.close * risk.slippageBps) / 10_000;
+  const executionPrice = bar.close + slipPerShare;
+  const notional = executionPrice * quantity;
+  return {
+    filled: true,
+    executionPrice,
+    commissionJpy: commission(notional, risk),
+    slippageJpy: Math.round(slipPerShare * quantity),
+    filledQuantity: quantity,
+  };
+}
+
+/**
  * Simulate a market-ish exit (take-profit, trailing-stop, MA-break, discretionary
  * AI sell). Fills at the day's close minus slippage. Used for non-stop exits where
  * we approximate execution at the closing auction.

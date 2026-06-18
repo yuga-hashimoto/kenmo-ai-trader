@@ -28,6 +28,7 @@ import {
 import { checkOrder } from '../risk/riskEngine.js';
 import {
   participationCap,
+  simulateCloseBuy,
   simulateExitAtClose,
   simulateLimitBuy,
   simulateLimitSell,
@@ -169,6 +170,13 @@ export interface BacktestEngineParams {
   capitalAwareCandidates?: boolean;
   /** Advisory direction from the human operator, injected into every decision. */
   humanGuidance?: import('../types/agent.js').HumanGuidance;
+  /**
+   * Execute entries at the day's CLOSE (market-on-close) instead of the open.
+   * For the live loop, decisions are made after the 15:40 close, so entering at
+   * the close means the entry day shows ≈ no P&L (you can't buy at a price that
+   * already passed this morning); P&L starts the next day. Realistic & intuitive.
+   */
+  fillEntriesAtClose?: boolean;
 }
 
 let __seq = 0;
@@ -668,10 +676,12 @@ export class BacktestEngine {
         order.status = 'cancelled';
         continue;
       }
-      // Cap to what is actually affordable now (post-sells). limit is the worst-
-      // case fill price for a limit buy, so this never overdraws.
+      // Cap to what is actually affordable now (post-sells). Use the price we
+      // will fill at (close for market-on-close, else the limit) so we never overdraw.
+      const atClose = this.params.fillEntriesAtClose === true;
+      const fillRef = atClose ? (bar.close || limit) : limit;
       const bp = this.buyingPowerOf(state, closeMap, allowMargin, config);
-      const affordableQty = Math.floor(bp / limit);
+      const affordableQty = Math.floor(bp / fillRef);
       if (affordableQty < qty) qty = affordableQty;
       if (qty <= 0) {
         order.status = 'cancelled';
@@ -692,7 +702,9 @@ export class BacktestEngine {
         order.rejectionReason = 'insufficient liquidity';
         continue;
       }
-      const fill = simulateLimitBuy(bar, limit, qty, config.risk);
+      const fill = atClose
+        ? simulateCloseBuy(bar, qty, config.risk)
+        : simulateLimitBuy(bar, limit, qty, config.risk);
       if (!fill.filled) {
         order.status = 'cancelled'; // limit not reached -> unfilled
         continue;

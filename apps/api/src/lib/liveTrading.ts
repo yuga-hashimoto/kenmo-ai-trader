@@ -135,6 +135,9 @@ export async function runDailyStep(paperRunId: string): Promise<DailyStepResult>
     capitalAwareCandidates: true,
     // The user's advisory direction (stance + free-text wishes).
     humanGuidance,
+    // Decisions are made after the 15:40 close, so enter at the day's close: the
+    // entry day shows ≈ no P&L (you can't buy at this morning's open at 15:40).
+    fillEntriesAtClose: true,
     promptVersion: strategy.promptVersion,
     modelName: process.env.HERMES_MODE === 'api' ? (process.env.AI_API_MODEL ?? 'api') : 'mock-hermes',
   });
