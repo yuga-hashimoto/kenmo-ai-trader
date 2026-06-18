@@ -255,12 +255,13 @@ export class BacktestEngine {
       for (const plan of scheduleByDate.get(date) ?? []) {
         let candidates = await provider.getCandidates(decisionDate, config);
         if (this.params.capitalAwareCandidates) {
-          const bp = this.buyingPowerOf(portfolio, priceMap, allowMargin, config);
-          // Keep only names whose minimum lot is affordable with current buying power.
+          // Gross buying power: include holdings the AI could sell to fund a buy,
+          // so attractive rotation candidates stay visible even when fully invested.
+          const bp = this.grossBuyingPowerOf(portfolio, priceMap, allowMargin, config);
           candidates = candidates.filter(
             (c) => c.close * (lotByCode.get(c.symbol) ?? 100) <= bp,
           );
-          // Broke and flat -> no buy possible and nothing to manage; skip the AI call.
+          // Nothing affordable even after liquidation AND nothing held -> skip the call.
           if (candidates.length === 0 && portfolio.positions.length === 0) continue;
         }
         for (const c of candidates) dayCandidates.set(c.symbol, c);
@@ -346,7 +347,7 @@ export class BacktestEngine {
       // ---- day end processing: exits first, then buy fills ----
       portfolio = this.processRiskExits(portfolio, dayBars, prevCloseMap, date, config, orders, executions, closedTrades, entryFeatures);
       portfolio = this.processAiSells(portfolio, dayBars, prevCloseMap, date, config, aiSells, orders, executions, closedTrades, entryFeatures);
-      portfolio = this.processBuyFills(portfolio, dayBars, prevCloseMap, date, config, pendingBuys, executions, entryFeatures, dayCandidates);
+      portfolio = this.processBuyFills(portfolio, dayBars, prevCloseMap, date, config, allowMargin, pendingBuys, executions, entryFeatures, dayCandidates);
 
       // Trail off the intraday high when monitoring exits intraday, else the close.
       portfolio = updateHighs(
@@ -431,7 +432,7 @@ export class BacktestEngine {
     return m;
   }
 
-  /** Buying power as-of the decision prices: cash (cash account) or leverage-bounded. */
+  /** Net buying power right now: free cash (cash account) or leverage headroom. */
   private buyingPowerOf(
     portfolio: PortfolioState,
     priceMap: Map<string, number>,
@@ -441,6 +442,24 @@ export class BacktestEngine {
     if (!allowMargin) return portfolio.cashJpy;
     const { snapshot } = computeSnapshot(portfolio, '1970-01-01', priceMap);
     return snapshot.equityJpy * config.risk.maxLeverageIfMarginEnabled - snapshot.marketValueJpy;
+  }
+
+  /**
+   * Gross buying power assuming current holdings could be liquidated to fund a
+   * better buy (rotation): equity for a cash account, equity×leverage on margin.
+   * Used so the AI can see — and decide to rotate into — names it can only afford
+   * by selling something first. The fill-time guard still bounds actual spend.
+   */
+  private grossBuyingPowerOf(
+    portfolio: PortfolioState,
+    priceMap: Map<string, number>,
+    allowMargin: boolean,
+    config: StrategyConfig,
+  ): number {
+    const { snapshot } = computeSnapshot(portfolio, '1970-01-01', priceMap);
+    return allowMargin
+      ? snapshot.equityJpy * config.risk.maxLeverageIfMarginEnabled
+      : snapshot.equityJpy;
   }
 
   private buildContext(
@@ -539,9 +558,16 @@ export class BacktestEngine {
       cashJpy: portfolio.cashJpy,
       marketValueJpy: snapshot.marketValueJpy,
       equityJpy: snapshot.equityJpy,
-      buyingPowerJpy: allowMargin
-        ? snapshot.equityJpy * config.risk.maxLeverageIfMarginEnabled - snapshot.marketValueJpy
-        : portfolio.cashJpy,
+      // In capital-aware (rotation) mode the buy is sized against gross buying
+      // power (holdings can be sold to fund it); the fill-time guard caps actual
+      // spend if the funding sell does not happen.
+      buyingPowerJpy: this.params.capitalAwareCandidates
+        ? (allowMargin
+            ? snapshot.equityJpy * config.risk.maxLeverageIfMarginEnabled
+            : snapshot.equityJpy)
+        : allowMargin
+          ? snapshot.equityJpy * config.risk.maxLeverageIfMarginEnabled - snapshot.marketValueJpy
+          : portfolio.cashJpy,
       allowMargin,
       totalExposureJpy: snapshot.marketValueJpy,
       totalReturnPct: snapshot.totalReturnPct,
@@ -606,18 +632,32 @@ export class BacktestEngine {
     prevCloseMap: Map<string, number>,
     date: string,
     config: StrategyConfig,
+    allowMargin: boolean,
     pendingBuys: Array<{ order: EngineOrderRecord; decision: AgentTradingDecision }>,
     executions: EngineExecutionRecord[],
     entryFeatures: Map<string, Record<string, unknown>>,
     dayCandidates: Map<string, Candidate>,
   ): PortfolioState {
     let state = portfolio;
+    // Fills run AFTER the day's sells, so buying power here already reflects any
+    // cash freed by a rotation sell. Bound each buy by it so spend can't overdraw.
+    const closeMap = this.closeMap(dayBars);
     for (const { order, decision } of pendingBuys) {
       const bar = dayBars.get(order.symbolCode);
       const limit = order.limitPrice ?? 0;
       let qty = order.finalQuantity ?? 0;
       if (!bar || qty <= 0 || limit <= 0) {
         order.status = 'cancelled';
+        continue;
+      }
+      // Cap to what is actually affordable now (post-sells). limit is the worst-
+      // case fill price for a limit buy, so this never overdraws.
+      const bp = this.buyingPowerOf(state, closeMap, allowMargin, config);
+      const affordableQty = Math.floor(bp / limit);
+      if (affordableQty < qty) qty = affordableQty;
+      if (qty <= 0) {
+        order.status = 'cancelled';
+        order.rejectionReason = 'insufficient buying power after sells';
         continue;
       }
       // ストップ高張り付き: 買いは約定不可
