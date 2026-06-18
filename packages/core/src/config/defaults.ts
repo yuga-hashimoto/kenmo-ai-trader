@@ -19,6 +19,7 @@ export const DEFAULT_STRATEGY_CONFIG: StrategyConfig = {
     slippageBps: 10,
     minConfidenceToTrade: 0.6,
     maxOrdersPerDay: 5,
+    exitBelowMa25: true,
   },
   universe: {
     minMarketCapJpy: 5_000_000_000,

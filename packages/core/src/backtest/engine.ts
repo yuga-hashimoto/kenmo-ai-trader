@@ -370,8 +370,18 @@ export class BacktestEngine {
         }
       }
 
+      // 25-day MA break: flag holdings that closed below their 25d MA as-of the
+      // decision day (kenmo's invalidation rule, enforced mechanically).
+      const maBroken = new Set<string>();
+      if (config.risk.exitBelowMa25) {
+        for (const pos of portfolio.positions) {
+          const bars = await provider.getDailyPrices(pos.symbolCode, '1900-01-01', decisionDate);
+          if (maBreakExitCandidate(bars)) maBroken.add(pos.symbolCode);
+        }
+      }
+
       // ---- day end processing: exits first, then buy fills ----
-      portfolio = this.processRiskExits(portfolio, dayBars, prevCloseMap, date, config, orders, executions, closedTrades, entryFeatures);
+      portfolio = this.processRiskExits(portfolio, dayBars, prevCloseMap, date, config, orders, executions, closedTrades, entryFeatures, maBroken);
       portfolio = this.processAiSells(portfolio, dayBars, prevCloseMap, date, config, aiSells, orders, executions, closedTrades, entryFeatures);
       portfolio = this.processBuyFills(portfolio, dayBars, prevCloseMap, date, config, allowMargin, pendingBuys, executions, entryFeatures, dayCandidates);
 
@@ -778,6 +788,7 @@ export class BacktestEngine {
     executions: EngineExecutionRecord[],
     closedTrades: ClosedTrade[],
     entryFeatures: Map<string, Record<string, unknown>>,
+    maBroken: Set<string> = new Set(),
   ): PortfolioState {
     void entryFeatures;
     let state = portfolio;
@@ -794,6 +805,13 @@ export class BacktestEngine {
       if (stop !== null && bar.low <= stop) {
         const fill = simulateStopLossSell(bar, stop, pos.quantity, config.risk);
         state = this.recordSell(state, pos.symbolCode, pos.quantity, fill.executionPrice, fill.commissionJpy, fill.slippageJpy, date, 'stop_loss -8%', 'risk_management', orders, executions, closedTrades);
+        continue;
+      }
+
+      // 1b) 25-day MA break (kenmo invalidation): full exit at the close.
+      if (config.risk.exitBelowMa25 && maBroken.has(pos.symbolCode)) {
+        const fill = simulateExitAtClose(bar, pos.quantity, config.risk);
+        state = this.recordSell(state, pos.symbolCode, pos.quantity, fill.executionPrice, fill.commissionJpy, fill.slippageJpy, date, 'ma25_break', 'risk_management', orders, executions, closedTrades);
         continue;
       }
 

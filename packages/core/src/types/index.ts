@@ -125,6 +125,9 @@ export interface RiskConfig {
   slippageBps: number;
   minConfidenceToTrade: number;
   maxOrdersPerDay: number;
+  /** kenmo discipline: mechanically exit a holding once it closes below its 25-day
+   *  moving average (the AI's usual invalidation condition, enforced by rules). */
+  exitBelowMa25: boolean;
 }
 
 export interface UniverseConfig {
