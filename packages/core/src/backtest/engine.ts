@@ -44,6 +44,8 @@ import type { LossType } from '../types/index.js';
 /** Minimal structural port over HermesAgentClient (avoids core->hermes dependency). */
 export interface AgentPort {
   runTradingTask(ctx: AgentTaskContext): Promise<AgentTaskResult>;
+  /** Optional audit hook: what actually answered the last call ("api"/"mock"/…). */
+  lastCallInfo?(): { backend: string; error: string | null };
 }
 
 export interface EngineOrderRecord {
@@ -293,11 +295,21 @@ export class BacktestEngine {
         let result: AgentTaskResult;
         let outputValid = true;
         let errorMessage: string | null = null;
+        let actualModel = modelName;
         try {
           result = await agent.runTradingTask(ctx);
+          // Audit which backend really answered: a client that silently fell back
+          // to the deterministic mock must not be recorded as the AI model.
+          const info = agent.lastCallInfo?.();
+          if (info && info.backend === 'mock') {
+            actualModel = 'mock-fallback';
+            outputValid = false;
+            errorMessage = info.error;
+          }
         } catch (err) {
           outputValid = false;
           errorMessage = err instanceof Error ? err.message : String(err);
+          actualModel = 'mock-fallback';
           result = { taskType: plan.eventType, decisions: [], watchlistSymbols: [], notes: errorMessage };
         }
 
@@ -306,7 +318,7 @@ export class BacktestEngine {
           id: agentRunId,
           agentRole: this.roleForTask(plan.eventType),
           taskType: plan.eventType,
-          modelName,
+          modelName: actualModel,
           promptVersion,
           inputJson: ctx,
           outputJson: result,

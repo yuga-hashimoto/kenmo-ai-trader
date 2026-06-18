@@ -52,6 +52,13 @@ export class OpenAICompatHermesAgentClient implements HermesAgentClient {
   private readonly apiKey: string | undefined;
   private readonly model: string;
   private readonly timeoutMs: number;
+  // Audit: which backend answered the most recent runTradingTask, and why if mock.
+  private lastBackend: 'api' | 'mock' = 'api';
+  private lastError: string | null = null;
+
+  lastCallInfo(): { backend: string; error: string | null } {
+    return { backend: this.lastBackend, error: this.lastError };
+  }
 
   constructor(config: OpenAICompatConfig = {}) {
     this.baseUrl = (config.baseUrl ?? 'https://opencode.ai/zen/go/v1').replace(/\/+$/, '');
@@ -165,6 +172,8 @@ export class OpenAICompatHermesAgentClient implements HermesAgentClient {
   }
 
   async runTradingTask(context: AgentTaskContext): Promise<AgentTaskResult> {
+    this.lastBackend = 'api';
+    this.lastError = null;
     try {
       const symbolStrategyMap = new Map<string, string>();
       for (const c of context.candidates ?? []) symbolStrategyMap.set(c.symbol, c.strategy);
@@ -188,6 +197,8 @@ export class OpenAICompatHermesAgentClient implements HermesAgentClient {
         taskTypeDefault: context.taskType,
       });
     } catch (err) {
+      this.lastBackend = 'mock';
+      this.lastError = err instanceof Error ? err.message : String(err);
       console.error('[OpenAICompatHermesAgentClient] runTradingTask failed, using mock:', err);
       return this.fallback.runTradingTask(context);
     }
