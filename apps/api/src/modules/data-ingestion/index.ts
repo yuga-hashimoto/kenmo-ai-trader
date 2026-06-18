@@ -851,41 +851,58 @@ async function runEdinetIngestion(runId: string, targetDate: Date): Promise<{ co
   try {
     const list = await provider.fetchDocumentList(targetDate);
     await saveRawApiSuccess(runId, endpoint, requestParams, list);
-    
+
+    // EDINET lists every filer (funds, foreign issuers, …); keep only documents
+    // for symbols in our universe. secCode is 5-char (4-digit + check "0"); our
+    // JPX codes are also 5-char, but try the 4-digit form as a fallback.
+    const validCodes = new Set(
+      (await prisma.symbol.findMany({ select: { code: true } })).map((s) => s.code),
+    );
+    const resolveCode = (secCode: string): string | null => {
+      if (validCodes.has(secCode)) return secCode;
+      const four = secCode.slice(0, 4);
+      if (validCodes.has(four)) return four;
+      return null;
+    };
+
     let inserted = 0;
     for (const doc of list.results) {
       if (!doc.secCode) continue;
-      const symbolCode = doc.secCode;
-      
-      await prisma.disclosureDocument.create({
-        data: {
-          symbolCode,
-          disclosureNumber: doc.docId,
-          docId: doc.docId,
-          source: 'edinet',
-          docTypeCode: doc.docTypeCode,
-          docType: provider.classifyEdinetDocument(doc.docTypeCode),
-          title: doc.docDescription || 'EDINET Document',
-          submittedAt: new Date(doc.submitDateTime),
-          periodStart: doc.periodStart ? new Date(doc.periodStart) : null,
-          periodEnd: doc.periodEnd ? new Date(doc.periodEnd) : null,
-          pdfUrl: doc.pdfFlag === '1' ? `https://disclosure2.edinet-fsa.go.jp/api/v2/documents/${doc.docId}?type=2` : null,
-          xbrlUrl: doc.xbrlFlag === '1' ? `https://disclosure2.edinet-fsa.go.jp/api/v2/documents/${doc.docId}?type=1` : null,
-          rawMetaJson: doc as any,
-        },
-      });
-      
-      await prisma.disclosure.create({
-        data: {
-          symbolCode,
-          disclosedAt: new Date(doc.submitDateTime),
-          disclosureType: provider.classifyEdinetDocument(doc.docTypeCode),
-          title: doc.docDescription || 'EDINET Document',
-          summary: `${doc.filerName} が書類を提出しました。種類: ${doc.docDescription}`,
-          rawJson: doc as any,
-        },
-      });
-      inserted++;
+      const symbolCode = resolveCode(doc.secCode);
+      if (!symbolCode) continue; // filer not in our tradable universe
+
+      try {
+        await prisma.disclosureDocument.create({
+          data: {
+            symbolCode,
+            disclosureNumber: doc.docId,
+            docId: doc.docId,
+            source: 'edinet',
+            docTypeCode: doc.docTypeCode,
+            docType: provider.classifyEdinetDocument(doc.docTypeCode),
+            title: doc.docDescription || 'EDINET Document',
+            submittedAt: new Date(doc.submitDateTime),
+            periodStart: doc.periodStart ? new Date(doc.periodStart) : null,
+            periodEnd: doc.periodEnd ? new Date(doc.periodEnd) : null,
+            pdfUrl: doc.pdfFlag === '1' ? `https://api.edinet-fsa.go.jp/api/v2/documents/${doc.docId}?type=2` : null,
+            xbrlUrl: doc.xbrlFlag === '1' ? `https://api.edinet-fsa.go.jp/api/v2/documents/${doc.docId}?type=1` : null,
+            rawMetaJson: doc as any,
+          },
+        });
+        await prisma.disclosure.create({
+          data: {
+            symbolCode,
+            disclosedAt: new Date(doc.submitDateTime),
+            disclosureType: provider.classifyEdinetDocument(doc.docTypeCode),
+            title: doc.docDescription || 'EDINET Document',
+            summary: `${doc.filerName} が書類を提出しました。種類: ${doc.docDescription}`,
+            rawJson: doc as any,
+          },
+        });
+        inserted++;
+      } catch {
+        // duplicate docId or transient row issue — skip this document, keep going.
+      }
     }
     return { count: inserted };
   } catch (error) {
@@ -995,6 +1012,51 @@ export async function ingestDailyPrices(
       targetDate,
       targetDate,
     );
+    await prisma.dataIngestionRun.update({
+      where: { id: run.id },
+      data: { status: 'completed', finishedAt: new Date(), recordCount: result.count },
+    });
+    await prisma.dataSource.update({
+      where: { id: dataSource.id },
+      data: { lastFetchedAt: new Date(), lastFetchCount: result.count, lastError: null },
+    });
+    return { count: result.count, runId: run.id };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await prisma.dataIngestionRun.update({
+      where: { id: run.id },
+      data: { status: 'failed', finishedAt: new Date(), errorMessage: msg },
+    });
+    await prisma.dataSource.update({ where: { id: dataSource.id }, data: { lastError: msg } });
+    throw err;
+  }
+}
+
+/**
+ * Fetch EDINET disclosure documents (有報・四半期報告書 等) for a date and store them
+ * as Disclosure rows, which the strategy reads as `disclosureText` to flag
+ * one-time-profit growth (earnings-quality filter). No-op unless EDINET_ENABLED.
+ */
+export async function ingestEdinetDisclosures(
+  targetDate: Date = new Date(),
+): Promise<{ count: number; runId: string } | null> {
+  if (process.env.EDINET_ENABLED !== 'true') return null;
+  const dataSource = await prisma.dataSource.upsert({
+    where: { sourceType: 'edinet' },
+    create: { sourceType: 'edinet', enabled: true },
+    update: {},
+  });
+  const run = await prisma.dataIngestionRun.create({
+    data: {
+      dataSourceId: dataSource.id,
+      datasetName: 'edinet_documents',
+      targetDate,
+      status: 'running',
+      startedAt: new Date(),
+    },
+  });
+  try {
+    const result = await runEdinetIngestion(run.id, targetDate);
     await prisma.dataIngestionRun.update({
       where: { id: run.id },
       data: { status: 'completed', finishedAt: new Date(), recordCount: result.count },

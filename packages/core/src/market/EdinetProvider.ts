@@ -51,7 +51,9 @@ export interface EdinetLargeShareholding {
 export class EdinetProvider {
   constructor(
     private readonly apiKey: string,
-    private readonly baseUrl: string = 'https://disclosure2.edinet-fsa.go.jp/api/v2',
+    // EDINET API v2 lives on api.edinet-fsa.go.jp; disclosure2.* is the web UI and
+    // 302-redirects API calls to an error page.
+    private readonly baseUrl: string = 'https://api.edinet-fsa.go.jp/api/v2',
   ) {}
 
   private async get<T>(path: string, params?: Record<string, string>): Promise<T> {
@@ -192,5 +194,5 @@ export function createEdinetProvider(env: NodeJS.ProcessEnv = process.env): AnyE
     console.warn('EDINET_ENABLED=true but EDINET_API_KEY not set — disabled');
     return new DisabledEdinetProvider();
   }
-  return new EdinetProvider(env.EDINET_API_KEY);
+  return new EdinetProvider(env.EDINET_API_KEY, env.EDINET_BASE_URL || undefined);
 }

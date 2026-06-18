@@ -7,7 +7,7 @@ import {
 } from '@kenmo/core';
 import { audit } from '../audit/index.js';
 import { catchUpRun } from '../../lib/liveTrading.js';
-import { ingestDailyPrices } from '../data-ingestion/index.js';
+import { ingestDailyPrices, ingestEdinetDisclosures } from '../data-ingestion/index.js';
 
 let scheduler: RealtimeMarketScheduler | null = null;
 let lastEvent: SessionEvent | null = null;
@@ -31,8 +31,9 @@ function triggerLiveTrading(app: FastifyInstance, event: SessionEvent): void {
     // 1) Refresh today's market data (close is final after the session) so the
     //    trading step has fresh bars to screen and trade on.
     if (process.env.ENABLE_AUTO_INGESTION !== 'false') {
+      const day = new Date(`${event.date}T00:00:00+09:00`);
       try {
-        const { count } = await ingestDailyPrices(new Date(`${event.date}T00:00:00+09:00`));
+        const { count } = await ingestDailyPrices(day);
         app.log.info({ date: event.date, count }, 'daily prices ingested');
         await audit('system', 'ingestion.daily_prices', 'DataIngestionRun', null, {
           date: event.date,
@@ -40,6 +41,13 @@ function triggerLiveTrading(app: FastifyInstance, event: SessionEvent): void {
         });
       } catch (err) {
         app.log.error({ err }, 'daily price ingestion failed; trading on existing data');
+      }
+      // EDINET disclosures (feeds the earnings-quality / one-time-profit filter).
+      try {
+        const edinet = await ingestEdinetDisclosures(day);
+        if (edinet) app.log.info({ date: event.date, count: edinet.count }, 'edinet disclosures ingested');
+      } catch (err) {
+        app.log.error({ err }, 'edinet ingestion failed; continuing');
       }
     }
 
