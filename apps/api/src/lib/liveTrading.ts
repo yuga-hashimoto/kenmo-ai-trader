@@ -59,7 +59,14 @@ async function reconstructPortfolio(
   };
 }
 
-/** Pick the earliest trading date that has not yet been processed for this run. */
+/**
+ * Pick the earliest trading date this run has not processed yet.
+ *
+ * A brand-new live run does NOT replay all history — it starts from a short
+ * recent window (LIVE_BACKFILL_DAYS, default 5 trading days) and then walks
+ * forward as new market data arrives. This keeps "go live" responsive instead
+ * of grinding through years of bars.
+ */
 async function nextUnprocessedDate(paperRunId: string): Promise<string | null> {
   const provider = await loadMarketDataProvider();
   const dates = await provider.getTradingDates();
@@ -68,7 +75,10 @@ async function nextUnprocessedDate(paperRunId: string): Promise<string | null> {
     where: { paperRunId },
     orderBy: { snapshotDate: 'desc' },
   });
-  if (!lastSnap) return dates[0]!;
+  if (!lastSnap) {
+    const backfill = Math.max(1, Number(process.env.LIVE_BACKFILL_DAYS ?? 5));
+    return dates[Math.max(0, dates.length - backfill)]!;
+  }
   const last = isoDay(lastSnap.snapshotDate);
   return dates.find((d) => d > last) ?? null;
 }
