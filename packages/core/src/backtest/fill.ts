@@ -97,6 +97,34 @@ export function simulateStopLossSell(
 }
 
 /**
+ * Standing limit SELL at a target price (e.g. take-profit). Fills only if the
+ * day's high reaches the limit; a gap-up open above the limit fills at the open
+ * (better), otherwise at the limit. Models a resting order that triggers
+ * intraday — the upside mirror of simulateStopLossSell.
+ */
+export function simulateLimitSell(
+  bar: DailyBar,
+  limitPrice: number,
+  quantity: number,
+  risk: RiskConfig,
+): FillResult {
+  if (quantity <= 0 || limitPrice <= 0) return NO_FILL;
+  if (bar.high < limitPrice) return NO_FILL;
+
+  const basePrice = bar.open >= limitPrice ? bar.open : limitPrice;
+  const slipPerShare = (basePrice * risk.slippageBps) / 10_000;
+  const executionPrice = Math.max(0, basePrice - slipPerShare);
+  const notional = executionPrice * quantity;
+  return {
+    filled: true,
+    executionPrice,
+    commissionJpy: commission(notional, risk),
+    slippageJpy: Math.round(slipPerShare * quantity),
+    filledQuantity: quantity,
+  };
+}
+
+/**
  * Simulate a market-ish exit (take-profit, trailing-stop, MA-break, discretionary
  * AI sell). Fills at the day's close minus slippage. Used for non-stop exits where
  * we approximate execution at the closing auction.

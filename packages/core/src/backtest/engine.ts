@@ -30,6 +30,7 @@ import {
   participationCap,
   simulateExitAtClose,
   simulateLimitBuy,
+  simulateLimitSell,
   simulateStopLossSell,
 } from './fill.js';
 import { isLimitDownLocked, isLimitUpLocked } from '../market/priceLimits.js';
@@ -152,6 +153,13 @@ export interface BacktestEngineParams {
    * the AI cost. Used by the live loop.
    */
   singleDailySession?: boolean;
+  /**
+   * Treat take-profit and trailing-stop as standing orders that trigger on the
+   * day's intraday extremes (high/low), like stop-loss already does — the
+   * daily-bar equivalent of monitoring exits continuously through the session.
+   * Needs no AI. Without this they only check the close and miss intraday moves.
+   */
+  intradayRiskExits?: boolean;
 }
 
 let __seq = 0;
@@ -324,7 +332,11 @@ export class BacktestEngine {
       portfolio = this.processAiSells(portfolio, dayBars, prevCloseMap, date, config, aiSells, orders, executions, closedTrades, entryFeatures);
       portfolio = this.processBuyFills(portfolio, dayBars, prevCloseMap, date, config, pendingBuys, executions, entryFeatures, dayCandidates);
 
-      portfolio = updateHighs(portfolio, this.closeMap(dayBars));
+      // Trail off the intraday high when monitoring exits intraday, else the close.
+      portfolio = updateHighs(
+        portfolio,
+        this.params.intradayRiskExits ? this.highMap(dayBars) : this.closeMap(dayBars),
+      );
       const { snapshot, peakEquityJpy } = computeSnapshot(portfolio, date, this.closeMap(dayBars));
       portfolio = { ...portfolio, peakEquityJpy };
       snapshots.push(snapshot);
@@ -394,6 +406,12 @@ export class BacktestEngine {
   private closeMap(dayBars: Map<string, DailyBar>): Map<string, number> {
     const m = new Map<string, number>();
     for (const [code, bar] of dayBars) m.set(code, bar.close);
+    return m;
+  }
+
+  private highMap(dayBars: Map<string, DailyBar>): Map<string, number> {
+    const m = new Map<string, number>();
+    for (const [code, bar] of dayBars) m.set(code, bar.high);
     return m;
   }
 
@@ -670,22 +688,36 @@ export class BacktestEngine {
       }
 
       const close = bar.close;
-      // 2) take-profit (+takeProfitPct -> sell takeProfitSellPct%), fires once
+      const intraday = this.params.intradayRiskExits === true;
+      // 2) take-profit (+takeProfitPct -> sell takeProfitSellPct%), fires once.
+      // intraday: a resting limit-sell that triggers if the day's HIGH reaches
+      // the target; otherwise only the close is checked.
       const tpPrice = pos.avgPrice * (1 + config.risk.takeProfitPct / 100);
-      if (close >= tpPrice && !pos.partialTpDone) {
+      const tpHit = intraday ? bar.high >= tpPrice : close >= tpPrice;
+      if (tpHit && !pos.partialTpDone) {
         const sellQty = Math.max(1, Math.floor((pos.quantity * config.risk.takeProfitSellPct) / 100));
-        const fill = simulateExitAtClose(bar, sellQty, config.risk);
-        state = this.recordSell(state, pos.symbolCode, sellQty, fill.executionPrice, fill.commissionJpy, fill.slippageJpy, date, `take_profit +${config.risk.takeProfitPct}%`, 'risk_management', orders, executions, closedTrades);
-        state = markPartialTpDone(state, pos.symbolCode);
-        continue;
+        const fill = intraday
+          ? simulateLimitSell(bar, tpPrice, sellQty, config.risk)
+          : simulateExitAtClose(bar, sellQty, config.risk);
+        if (fill.filled) {
+          state = this.recordSell(state, pos.symbolCode, sellQty, fill.executionPrice, fill.commissionJpy, fill.slippageJpy, date, `take_profit +${config.risk.takeProfitPct}%`, 'risk_management', orders, executions, closedTrades);
+          state = markPartialTpDone(state, pos.symbolCode);
+          continue;
+        }
       }
 
-      // 3) trailing stop (from high)
+      // 3) trailing stop (from high). intraday: a resting stop that triggers if
+      // the day's LOW breaches the trail; otherwise only the close is checked.
       const trailPrice = pos.highestPriceSinceEntry * (1 - config.risk.trailingStopPct / 100);
-      if (pos.highestPriceSinceEntry > pos.avgPrice && close <= trailPrice) {
-        const fill = simulateExitAtClose(bar, pos.quantity, config.risk);
-        state = this.recordSell(state, pos.symbolCode, pos.quantity, fill.executionPrice, fill.commissionJpy, fill.slippageJpy, date, `trailing_stop -${config.risk.trailingStopPct}%`, 'risk_management', orders, executions, closedTrades);
-        continue;
+      const trailHit = intraday ? bar.low <= trailPrice : close <= trailPrice;
+      if (pos.highestPriceSinceEntry > pos.avgPrice && trailHit) {
+        const fill = intraday
+          ? simulateStopLossSell(bar, trailPrice, pos.quantity, config.risk)
+          : simulateExitAtClose(bar, pos.quantity, config.risk);
+        if (fill.filled) {
+          state = this.recordSell(state, pos.symbolCode, pos.quantity, fill.executionPrice, fill.commissionJpy, fill.slippageJpy, date, `trailing_stop -${config.risk.trailingStopPct}%`, 'risk_management', orders, executions, closedTrades);
+          continue;
+        }
       }
     }
     return state;

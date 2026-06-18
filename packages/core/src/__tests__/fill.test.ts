@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { simulateLimitBuy, simulateStopLossSell, simulateExitAtClose } from '../backtest/fill.js';
+import { simulateLimitBuy, simulateLimitSell, simulateStopLossSell, simulateExitAtClose } from '../backtest/fill.js';
 import { DEFAULT_STRATEGY_CONFIG } from '../config/defaults.js';
 import type { DailyBar } from '../types/index.js';
 
@@ -50,5 +50,24 @@ describe('fill simulation', () => {
     expect(fill.filled).toBe(true);
     expect(fill.executionPrice).toBeLessThanOrEqual(1080);
     expect(fill.executionPrice).toBeGreaterThan(1070);
+  });
+
+  it('14. limit sell (take-profit) fills when high >= limit, at the limit', () => {
+    // high(1120) reaches limit(1100) intraday even though close(1050) is below it
+    const fill = simulateLimitSell(bar(1010, 1120, 1000, 1050), 1100, 100, risk);
+    expect(fill.filled).toBe(true);
+    expect(fill.executionPrice).toBeLessThanOrEqual(1100);
+    expect(fill.executionPrice).toBeGreaterThan(1090);
+  });
+
+  it('15. limit sell does not fill when the day never reaches the limit', () => {
+    const fill = simulateLimitSell(bar(1010, 1080, 1000, 1050), 1100, 100, risk);
+    expect(fill.filled).toBe(false);
+  });
+
+  it('16. gap-up open above the limit fills at the open (price improvement)', () => {
+    const fill = simulateLimitSell(bar(1150, 1180, 1140, 1160), 1100, 100, risk);
+    expect(fill.filled).toBe(true);
+    expect(fill.executionPrice).toBeGreaterThan(1100); // better than the limit
   });
 });

@@ -116,6 +116,9 @@ export async function runDailyStep(paperRunId: string): Promise<DailyStepResult>
     decideAsOfPriorTradingDay: true,
     // Daily bars => one AI call/day is equivalent to the 8-session schedule.
     singleDailySession: true,
+    // Risk exits (stop/take-profit/trailing) trigger on the day's intraday
+    // high/low like standing orders — sells are "watched" all day, no AI needed.
+    intradayRiskExits: true,
     promptVersion: strategy.promptVersion,
     modelName: process.env.HERMES_MODE === 'api' ? (process.env.AI_API_MODEL ?? 'api') : 'mock-hermes',
   });
