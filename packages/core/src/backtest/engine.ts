@@ -254,6 +254,9 @@ export class BacktestEngine {
 
       for (const plan of scheduleByDate.get(date) ?? []) {
         let candidates = await provider.getCandidates(decisionDate, config);
+        // Today's score for EVERY screened symbol (incl. ones we hold), so held
+        // positions can be re-scored and compared against fresh candidates.
+        const scoreBySymbol = new Map(candidates.map((c) => [c.symbol, c]));
         if (this.params.capitalAwareCandidates) {
           // Gross buying power: include holdings the AI could sell to fund a buy,
           // so attractive rotation candidates stay visible even when fully invested.
@@ -274,6 +277,7 @@ export class BacktestEngine {
           toJstIso(date, plan.virtualTime),
           allowMargin,
           config,
+          scoreBySymbol,
         );
 
         let result: AgentTaskResult;
@@ -471,8 +475,10 @@ export class BacktestEngine {
     backtestTime: string,
     allowMargin: boolean,
     config: StrategyConfig,
+    scoreBySymbol: Map<string, Candidate>,
   ): AgentTaskContext {
-    const { snapshot } = computeSnapshot(portfolio, backtestTime.slice(0, 10), priceMap);
+    const asOf = backtestTime.slice(0, 10);
+    const { snapshot } = computeSnapshot(portfolio, asOf, priceMap);
     const equity = snapshot.equityJpy;
     const exposure = snapshot.marketValueJpy;
     const buyingPower = allowMargin
@@ -505,6 +511,9 @@ export class BacktestEngine {
       },
       positions: portfolio.positions.map((p) => {
         const current = priceMap.get(p.symbolCode) ?? p.avgPrice;
+        const cand = scoreBySymbol.get(p.symbolCode);
+        const high = p.highestPriceSinceEntry;
+        const heldMs = new Date(asOf).getTime() - new Date(p.entryDate).getTime();
         return {
           symbol: p.symbolCode,
           name: symbolName.get(p.symbolCode) ?? p.symbolCode,
@@ -516,7 +525,13 @@ export class BacktestEngine {
           entryReason: p.entryReason,
           strategy: p.strategy,
           stopLossPrice: p.stopLossPrice,
-          highestPriceSinceEntry: p.highestPriceSinceEntry,
+          highestPriceSinceEntry: high,
+          holdingDays: Math.max(0, Math.floor(heldMs / 86_400_000)),
+          // Re-score the holding through today's screen: low/null score after a long
+          // hold = stalled "dead money" the AI can rotate out of for a stronger name.
+          currentScore: cand?.score ?? null,
+          currentSignals: cand?.reasons ?? [],
+          pctOffHighSinceEntry: high && high > 0 ? ((current - high) / high) * 100 : null,
         };
       }),
       candidates,

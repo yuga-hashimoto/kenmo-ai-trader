@@ -47,6 +47,15 @@ export interface AgentPositionView {
   strategy: string;
   stopLossPrice: number | null;
   highestPriceSinceEntry: number | null;
+  /** Calendar days held — lets the AI spot dead money ("promising but flat for a month"). */
+  holdingDays: number;
+  /** The position re-scored as a candidate TODAY (null if it no longer screens). Compare
+   *  against candidate scores to judge whether a new name's expected value beats this holding. */
+  currentScore: number | null;
+  /** Today's screening reasons for the holding (empty if it no longer qualifies). */
+  currentSignals: string[];
+  /** % below the peak since entry — a fading/stalling signal (0 = still at its high). */
+  pctOffHighSinceEntry: number | null;
 }
 
 /** The full context object handed to HermesAgent for every task. */
