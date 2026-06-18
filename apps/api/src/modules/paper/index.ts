@@ -7,6 +7,7 @@ import { parseStrategyConfig } from '../../lib/config.js';
 import { getAgent } from '../../lib/agent.js';
 import { persistRunResult } from '../../lib/persist.js';
 import { runDailyStep, catchUpRun, seedBaselineAtLatest } from '../../lib/liveTrading.js';
+import { getLiveQuote } from '../../lib/liveQuote.js';
 import { audit } from '../audit/index.js';
 
 /**
@@ -57,6 +58,12 @@ async function replayPaperRun(id: string): Promise<void> {
     endDate: dates[dates.length - 1]!,
     promptVersion: strategy.promptVersion,
     modelName: process.env.HERMES_MODE === 'remote' ? 'hermes-remote' : 'mock-hermes',
+    // Same realistic flags as the live loop (no look-ahead, close fills, etc.).
+    decideAsOfPriorTradingDay: true,
+    singleDailySession: true,
+    intradayRiskExits: true,
+    capitalAwareCandidates: true,
+    fillEntriesAtClose: true,
   });
   const result = await engine.run();
 
@@ -179,25 +186,43 @@ export async function paperRoutes(app: FastifyInstance): Promise<void> {
     );
     const openPositions = await Promise.all(
       positions.map(async (p) => {
-        const latest = await prisma.dailyPrice.findFirst({
-          where: { symbolCode: p.symbolCode },
-          orderBy: { date: 'desc' },
-          select: { close: true },
-        });
-        const currentPrice = latest?.close ?? p.avgPrice;
+        // Prefer a live quote (Yahoo) when the dashboard is viewed; fall back to
+        // the last stored daily close if the quote is unavailable.
+        const live = await getLiveQuote(p.symbolCode);
+        let currentPrice = live;
+        if (currentPrice == null) {
+          const latest = await prisma.dailyPrice.findFirst({
+            where: { symbolCode: p.symbolCode },
+            orderBy: { date: 'desc' },
+            select: { close: true },
+          });
+          currentPrice = latest?.close ?? p.avgPrice;
+        }
         const pnlJpy = (currentPrice - p.avgPrice) * p.quantity;
         const pnlPct = p.avgPrice > 0 ? ((currentPrice - p.avgPrice) / p.avgPrice) * 100 : 0;
         return {
           ...p,
           name: names.get(p.symbolCode) ?? p.symbolCode,
           currentPrice,
+          priceIsLive: live != null,
           marketValueJpy: currentPrice * p.quantity,
           pnlJpy,
           pnlPct,
         };
       }),
     );
-    return reply.send({ ...run, openPositions });
+    // Live total equity = latest cash + live market value of holdings, so the
+    // headline figure tracks current quotes too (not just the last close).
+    const lastSnap = await prisma.portfolioSnapshot.findFirst({
+      where: { paperRunId: run.id },
+      orderBy: { snapshotDate: 'desc' },
+      select: { cashJpy: true },
+    });
+    const liveEquityJpy =
+      lastSnap != null
+        ? lastSnap.cashJpy + openPositions.reduce((s, p) => s + p.marketValueJpy, 0)
+        : null;
+    return reply.send({ ...run, openPositions, liveEquityJpy });
   });
 
   app.get<{ Params: { id: string } }>('/api/paper-runs/:id/snapshots', async (req) => {

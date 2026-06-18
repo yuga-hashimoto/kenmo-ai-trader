@@ -44,6 +44,14 @@ export async function runBacktest(id: string): Promise<void> {
       startDate: run.startDate.toISOString().slice(0, 10),
       endDate: run.endDate.toISOString().slice(0, 10),
       promptVersion: strategy.promptVersion,
+      // Mirror the live loop so a backtest predicts live behaviour: decide on the
+      // prior session's data (no same-day look-ahead), one decision/day, intraday
+      // standing exits, capital-aware sizing, and entries filled at the close.
+      decideAsOfPriorTradingDay: true,
+      singleDailySession: true,
+      intradayRiskExits: true,
+      capitalAwareCandidates: true,
+      fillEntriesAtClose: true,
     });
     const result = await engine.run();
 

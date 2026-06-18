@@ -75,6 +75,7 @@ function relativeTime(d: string | null | undefined): string {
 export default function Home() {
   const [run, setRun] = useState<Run | null>(null);
   const [holdings, setHoldings] = useState<Holding[]>([]);
+  const [liveEquity, setLiveEquity] = useState<number | null>(null);
   const [snaps, setSnaps] = useState<Snapshot[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [alive, setAlive] = useState<{ running: boolean } | null>(null);
@@ -91,9 +92,15 @@ export default function Home() {
       const active = runs.find((r) => r.status === 'running') ?? runs[0] ?? null;
       setRun(active);
       if (active) {
-        api<{ openPositions: Holding[] }>(`/api/paper-runs/${active.id}`)
-          .then((d) => setHoldings(d.openPositions ?? []))
-          .catch(() => setHoldings([]));
+        api<{ openPositions: Holding[]; liveEquityJpy: number | null }>(`/api/paper-runs/${active.id}`)
+          .then((d) => {
+            setHoldings(d.openPositions ?? []);
+            setLiveEquity(d.liveEquityJpy ?? null);
+          })
+          .catch(() => {
+            setHoldings([]);
+            setLiveEquity(null);
+          });
         api<Snapshot[]>(`/api/paper-runs/${active.id}/snapshots`).then(setSnaps).catch(() => setSnaps([]));
         api<Trade[]>(`/api/paper-runs/${active.id}/trades`)
           .then((t) => setTrades(t.filter((x) => x.exitDate).slice(-30).reverse()))
@@ -147,9 +154,11 @@ export default function Home() {
   }
 
   const s = run.summaryJson;
-  const equity = s?.finalEquityJpy ?? run.initialCapitalJpy;
+  // Prefer the live equity (cash + current quotes) over the last stored close.
+  const equity = liveEquity ?? s?.finalEquityJpy ?? run.initialCapitalJpy;
   const profit = equity - run.initialCapitalJpy;
   const up = profit >= 0;
+  const returnPct = (profit / run.initialCapitalJpy) * 100;
 
   return (
     <div style={{ maxWidth: 880, margin: '0 auto' }}>
@@ -170,7 +179,7 @@ export default function Home() {
         <div className="muted" style={{ fontSize: 14 }}>いまの資産</div>
         <div style={{ fontSize: 44, fontWeight: 700, lineHeight: 1.1, margin: '6px 0' }}>{fmtJpy(equity)}</div>
         <div className={pnlClass(profit)} style={{ fontSize: 20, fontWeight: 600 }}>
-          {up ? '▲ +' : '▼ '}{fmtJpy(profit)}（{up ? '+' : ''}{fmtPct(s?.totalReturnPct ?? 0)}）
+          {up ? '▲ +' : '▼ '}{fmtJpy(profit)}（{up ? '+' : ''}{fmtPct(returnPct)}）
           <span style={{ fontSize: 14, marginLeft: 8 }}>{up ? '増えています' : '減っています'}</span>
         </div>
         <div className="muted" style={{ fontSize: 13, marginTop: 8 }}>
