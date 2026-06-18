@@ -5,7 +5,7 @@
   "description": "kenmo-style mid/small-cap growth investing autopilot — backtest-only MVP with a pluggable HermesAgent and pseudo Broker API.",
   "packageManager": "pnpm@11.5.1",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "db:generate": "pnpm --filter @kenmo/db generate",
