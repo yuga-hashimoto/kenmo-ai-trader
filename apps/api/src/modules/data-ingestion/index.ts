@@ -518,6 +518,7 @@ async function runYahooOrPythonIngestion(
   datasetName: YahooDatasetName,
   fromDate?: Date,
   toDate?: Date,
+  symbolsOverride?: string[],
 ): Promise<{ count: number }> {
   const from = fromDate || new Date();
   const to = toDate || new Date();
@@ -533,7 +534,8 @@ async function runYahooOrPythonIngestion(
     ? new YahooFinanceProvider() 
     : new YFinancePythonProvider();
 
-  const symbols = await getIngestionSymbols();
+  const symbols =
+    symbolsOverride && symbolsOverride.length > 0 ? symbolsOverride : await getIngestionSymbols();
   if (symbols.length === 0) {
     throw new Error(`${sourceType} ingestion requires active symbols in database.`);
   }
@@ -1079,6 +1081,47 @@ export async function ingestEdinetDisclosures(
       data: { status: 'failed', finishedAt: new Date(), errorMessage: msg },
     });
     await prisma.dataSource.update({ where: { id: dataSource.id }, data: { lastError: msg } });
+    throw err;
+  }
+}
+
+/**
+ * Refresh financial statements for a specific set of symbols (e.g. the day's
+ * screened candidates), not the whole universe. Earnings come quarterly, so this
+ * keeps the relevant names fresh cheaply instead of re-pulling every symbol.
+ */
+export async function ingestFinancialsFor(symbols: string[]): Promise<{ count: number } | null> {
+  if (symbols.length === 0) return null;
+  const sourceType: 'yahoo_finance' | 'yfinance_python' =
+    process.env.MARKET_INGEST_SOURCE === 'yfinance_python' ? 'yfinance_python' : 'yahoo_finance';
+  const dataSource = await prisma.dataSource.upsert({
+    where: { sourceType },
+    create: { sourceType, enabled: true },
+    update: {},
+  });
+  const run = await prisma.dataIngestionRun.create({
+    data: { dataSourceId: dataSource.id, datasetName: 'financial_statements', status: 'running', startedAt: new Date() },
+  });
+  try {
+    const result = await runYahooOrPythonIngestion(
+      run.id,
+      sourceType,
+      'financial_statements',
+      undefined,
+      undefined,
+      symbols,
+    );
+    await prisma.dataIngestionRun.update({
+      where: { id: run.id },
+      data: { status: 'completed', finishedAt: new Date(), recordCount: result.count },
+    });
+    return result;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await prisma.dataIngestionRun.update({
+      where: { id: run.id },
+      data: { status: 'failed', finishedAt: new Date(), errorMessage: msg },
+    });
     throw err;
   }
 }

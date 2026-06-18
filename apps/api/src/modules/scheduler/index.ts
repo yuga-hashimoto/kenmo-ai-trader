@@ -7,7 +7,8 @@ import {
 } from '@kenmo/core';
 import { audit } from '../audit/index.js';
 import { catchUpRun } from '../../lib/liveTrading.js';
-import { ingestDailyPrices, ingestEdinetDisclosures } from '../data-ingestion/index.js';
+import { ingestDailyPrices, ingestEdinetDisclosures, ingestFinancialsFor } from '../data-ingestion/index.js';
+import { loadMarketDataProvider } from '../../lib/marketData.js';
 
 let scheduler: RealtimeMarketScheduler | null = null;
 let lastEvent: SessionEvent | null = null;
@@ -48,6 +49,28 @@ function triggerLiveTrading(app: FastifyInstance, event: SessionEvent): void {
         if (edinet) app.log.info({ date: event.date, count: edinet.count }, 'edinet disclosures ingested');
       } catch (err) {
         app.log.error({ err }, 'edinet ingestion failed; continuing');
+      }
+
+      // Refresh financials ONLY for the day's screened candidates — earnings come
+      // quarterly, so this keeps the names that matter fresh without re-pulling the
+      // whole universe. (Used by the next session's earnings/ROE scoring.)
+      if (process.env.ENABLE_AUTO_INGESTION !== 'false') {
+        try {
+          const provider = await loadMarketDataProvider();
+          const dates = await provider.getTradingDates();
+          const latest = dates.at(-1);
+          if (latest) {
+            const cands = await provider.getCandidates(latest, DEFAULT_STRATEGY_CONFIG);
+            const symbols = [...cands]
+              .sort((a, b) => b.score - a.score)
+              .slice(0, 200)
+              .map((c) => c.symbol);
+            const fin = await ingestFinancialsFor(symbols);
+            if (fin) app.log.info({ symbols: symbols.length, count: fin.count }, 'candidate financials refreshed');
+          }
+        } catch (err) {
+          app.log.error({ err }, 'candidate financial refresh failed; continuing');
+        }
       }
     }
 
