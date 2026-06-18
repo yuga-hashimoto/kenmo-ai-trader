@@ -16,3 +16,8 @@ apps/web/playwright-report/
 
 # MCP / browser debug artifacts
 .playwright-mcp/
+
+# Agent scratch / debug output dumps
+apps/api/agent_decision.json
+apps/api/hermes-output.json
+apps/api/output.json
