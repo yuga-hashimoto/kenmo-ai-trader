@@ -43,6 +43,7 @@ interface Order {
 interface Run {
   id: string;
   status: string;
+  leagueRole?: string | null;
 }
 interface SchedulerStatus {
   lastEvent: { date: string; time: string; eventType: string } | null;
@@ -88,7 +89,11 @@ export default function Today() {
   const load = useCallback(async () => {
     try {
       const runs = await api<Run[]>('/api/paper-runs');
-      const active = runs.find((r) => r.status === 'running') ?? runs[0] ?? null;
+      const active =
+        runs.find((r) => r.leagueRole === 'champion' && r.status === 'running') ??
+        runs.find((r) => r.status === 'running') ??
+        runs[0] ??
+        null;
       if (!active) {
         setHasRun(false);
         return;

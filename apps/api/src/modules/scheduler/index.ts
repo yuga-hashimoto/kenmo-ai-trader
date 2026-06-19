@@ -9,6 +9,7 @@ import { audit } from '../audit/index.js';
 import { catchUpRun } from '../../lib/liveTrading.js';
 import { ingestDailyPrices, ingestEdinetDisclosures, ingestFinancialsFor } from '../data-ingestion/index.js';
 import { loadMarketDataProvider } from '../../lib/marketData.js';
+import { seedLeague, maybeRunTournament } from '../../lib/league.js';
 
 let scheduler: RealtimeMarketScheduler | null = null;
 let lastEvent: SessionEvent | null = null;
@@ -74,15 +75,32 @@ function triggerLiveTrading(app: FastifyInstance, event: SessionEvent): void {
       }
     }
 
-    // 2) Advance each running run (single-flight per run).
-    for (const run of runningPaper) {
-      void catchUpRun(run.id)
-        .then((steps) => {
-          if (steps.length > 0) {
-            app.log.info({ runId: run.id, days: steps.length }, 'live trading advanced');
-          }
-        })
-        .catch((err) => app.log.error({ runId: run.id, err }, 'live trading step failed'));
+    // 2) Advance each running run (champion + challengers + manual). Await them so
+    //    the league tournament that follows ranks on fully up-to-date portfolios.
+    await Promise.allSettled(
+      runningPaper.map((run) =>
+        catchUpRun(run.id)
+          .then((steps) => {
+            if (steps.length > 0) {
+              app.log.info({ runId: run.id, days: steps.length }, 'live trading advanced');
+            }
+          })
+          .catch((err) => app.log.error({ runId: run.id, err }, 'live trading step failed')),
+      ),
+    );
+
+    // 3) League: keep 1 champion + N challengers, and run the periodic tournament.
+    try {
+      await seedLeague();
+      const tournament = await maybeRunTournament();
+      if (tournament) {
+        app.log.info(
+          { promoted: tournament.promoted, retired: tournament.retired },
+          'league tournament ran',
+        );
+      }
+    } catch (err) {
+      app.log.error({ err }, 'league step failed');
     }
   })();
 }
@@ -123,6 +141,12 @@ export function startRealtimeScheduler(app: FastifyInstance): void {
   );
   scheduler.start();
   app.log.info('RealtimeMarketScheduler started');
+
+  // Seed the Champion/Challenger league so 5 challengers exist and start trading
+  // virtually from the next session. Non-blocking; safe to re-run (self-healing).
+  void seedLeague()
+    .then((r) => app.log.info({ challengersAdded: r.challengersAdded }, 'league seeded'))
+    .catch((err) => app.log.error({ err }, 'league seed failed'));
 }
 
 export async function schedulerRoutes(app: FastifyInstance): Promise<void> {

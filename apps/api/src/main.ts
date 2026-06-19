@@ -17,6 +17,7 @@ import { dataIngestionRoutes } from './modules/data-ingestion/index.js';
 import { dataQualityRoutes } from './modules/data-quality/index.js';
 import { guidanceRoutes } from './modules/guidance/index.js';
 import { analysisRoutes } from './modules/analysis/index.js';
+import { leagueRoutes } from './modules/league/index.js';
 
 async function buildServer() {
   const app = Fastify({ logger: true });
@@ -67,6 +68,7 @@ async function buildServer() {
   await app.register(dataQualityRoutes);
   await app.register(guidanceRoutes);
   await app.register(analysisRoutes);
+  await app.register(leagueRoutes);
 
   startRealtimeScheduler(app);
 

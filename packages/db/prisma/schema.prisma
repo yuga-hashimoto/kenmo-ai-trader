@@ -172,6 +172,8 @@ model PaperRun {
   allowMargin       Boolean
   strategyVersionId String
   status            PaperStatus @default(running)
+  /** League role: "champion" | "challenger" for tournament runs; null for manual runs. */
+  leagueRole        String?
   summaryJson       Json?
   startedAt         DateTime?
   stoppedAt         DateTime?

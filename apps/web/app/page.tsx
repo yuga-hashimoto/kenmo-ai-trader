@@ -11,6 +11,7 @@ interface Run {
   id: string;
   name: string;
   status: string;
+  leagueRole?: string | null;
   initialCapitalJpy: number;
   summaryJson: {
     finalEquityJpy: number;
@@ -89,7 +90,13 @@ export default function Home() {
   const load = useCallback(async () => {
     try {
       const runs = await api<Run[]>('/api/paper-runs');
-      const active = runs.find((r) => r.status === 'running') ?? runs[0] ?? null;
+      // Show the league champion's run (the strategy actually deciding), falling
+      // back to any running run for older setups without a league.
+      const active =
+        runs.find((r) => r.leagueRole === 'champion' && r.status === 'running') ??
+        runs.find((r) => r.status === 'running') ??
+        runs[0] ??
+        null;
       setRun(active);
       if (active) {
         api<{ openPositions: Holding[]; liveEquityJpy: number | null }>(`/api/paper-runs/${active.id}`)

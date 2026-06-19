@@ -55,6 +55,7 @@ export * from './broker/LiveBrokerAdapter.js';
 // Evolution
 export * from './evolution/evolution.js';
 export * from './evolution/ablation.js';
+export * from './evolution/mutation.js';
 
 // Fixtures / sample data
 export * from './fixtures/sampleDataset.js';
