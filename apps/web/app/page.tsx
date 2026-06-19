@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api, fmtJpy, fmtPct, fmtDate, pnlClass } from '@/lib/api';
+import { api, fmtJpy, fmtPct, fmtDate, fmtSymbol, pnlClass } from '@/lib/api';
 import { EquityChart } from '@/components/charts';
 
 type Stance = 'cautious' | 'balanced' | 'aggressive';
@@ -210,7 +210,7 @@ export default function Home() {
             <tbody>
               {holdings.map((h) => (
                 <tr key={h.symbolCode}>
-                  <td>{h.name}<span className="muted"> {h.symbolCode}</span></td>
+                  <td>{h.name}<span className="muted"> {fmtSymbol(h.symbolCode)}</span></td>
                   <td>{h.quantity}株</td>
                   <td>{fmtJpy(h.marketValueJpy)}</td>
                   <td className={pnlClass(h.pnlJpy)}>
@@ -235,7 +235,7 @@ export default function Home() {
               return (
                 <div key={t.id} style={{ borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span><b>{t.symbolCode}</b> を {t.quantity}株</span>
+                    <span><b>{fmtSymbol(t.symbolCode)}</b> を {t.quantity}株</span>
                     <span className={pnlClass(t.pnlJpy)} style={{ fontWeight: 600 }}>
                       {win ? '+' : ''}{fmtJpy(t.pnlJpy)} {win ? '儲かりました' : '損しました'}
                     </span>

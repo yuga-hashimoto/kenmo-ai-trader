@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api, fmtJpy, fmtDate } from '@/lib/api';
+import { api, fmtJpy, fmtDate, fmtSymbol } from '@/lib/api';
 
 /** One AI decision for a single symbol on a given session. */
 interface Decision {
@@ -199,7 +199,7 @@ export default function Today() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                     <span style={{ fontWeight: 600 }}>
                       <span className={isBuy ? 'pos' : 'neg'}>{isBuy ? '買い' : '売り'}</span>{' '}
-                      {name(d.symbol)} <span className="muted">{d.symbol}</span>
+                      {name(d.symbol)} <span className="muted">{fmtSymbol(d.symbol)}</span>
                     </span>
                     <span className="muted" style={{ fontSize: 13 }}>
                       {filled ? '約定' : ord?.status === 'rejected' ? '不成立' : '発注'}
@@ -243,7 +243,7 @@ export default function Today() {
                 <div key={d.symbol} style={{ borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                     <span>
-                      <b>{name(d.symbol)}</b> <span className="muted">{d.symbol}</span>
+                      <b>{name(d.symbol)}</b> <span className="muted">{fmtSymbol(d.symbol)}</span>
                     </span>
                     <span className="muted" style={{ fontSize: 12 }}>{strategyLabel(d.strategy)}</span>
                   </div>

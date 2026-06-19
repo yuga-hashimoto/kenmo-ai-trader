@@ -26,5 +26,11 @@ export const fmtPct = (n: number | null | undefined, digits = 1): string =>
 export const fmtDate = (d: string | null | undefined): string =>
   d ? new Date(d).toISOString().slice(0, 10) : '-';
 
+// J-Quants stores Japanese tickers as a 5-char local code: the familiar 4-char
+// ticker with a "0" appended (5998 → 59980, 135A → 135A0). Strip it for display
+// so users see the code they know. Other shapes pass through unchanged.
+export const fmtSymbol = (code: string | null | undefined): string =>
+  code && code.length === 5 && code.endsWith('0') ? code.slice(0, 4) : (code ?? '');
+
 export const pnlClass = (n: number | null | undefined): string =>
   n === null || n === undefined ? '' : n >= 0 ? 'pos' : 'neg';
