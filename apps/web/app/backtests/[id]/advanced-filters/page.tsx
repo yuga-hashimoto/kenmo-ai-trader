@@ -2,7 +2,7 @@
 
 import { use, useEffect, useState } from 'react';
 import { api, fmtPct } from '@/lib/api';
-import { Card } from '@/components/ui';
+import { Card, SymbolLink } from '@/components/ui';
 import { BacktestTabs } from '@/components/BacktestTabs';
 
 interface Features {
@@ -55,7 +55,7 @@ export default function AdvancedFiltersPage({ params }: { params: Promise<{ id: 
               const f = t.featuresAtEntryJson ?? {};
               return (
                 <tr key={t.id}>
-                  <td>{t.symbolCode}</td>
+                  <td><SymbolLink code={t.symbolCode} /></td>
                   <td>{t.entryDate.slice(0, 10)}</td>
                   <td className="muted">{t.strategy}</td>
                   <td>{f.earningsQuality ? `${f.earningsQuality.score} (${f.earningsQuality.oneTimeProfitRisk})` : '-'}</td>

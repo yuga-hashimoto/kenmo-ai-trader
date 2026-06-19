@@ -2,7 +2,7 @@
 
 import { use, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import { Card } from '@/components/ui';
+import { Card, SymbolLink } from '@/components/ui';
 import { BacktestTabs } from '@/components/BacktestTabs';
 
 interface AgentRun {
@@ -75,7 +75,7 @@ export default function AgentRunsPage({ params }: { params: Promise<{ id: string
                   <span className={d.decision === 'buy' ? 'pos' : d.decision === 'sell' ? 'neg' : 'muted'}>
                     {d.decision}
                   </span>{' '}
-                  {d.symbol} — <span className="muted">{d.reason}</span>
+                  <SymbolLink code={d.symbol} /> — <span className="muted">{d.reason}</span>
                 </div>
               ))}
               <h3 style={{ marginTop: 12 }}>input (AgentTaskContext)</h3>

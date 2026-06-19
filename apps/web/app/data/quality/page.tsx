@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import { Card } from '@/components/ui';
+import { Card, SymbolLink } from '@/components/ui';
 
 interface QualityIssue {
   severity: 'error' | 'warning' | 'info';
@@ -209,7 +209,7 @@ export default function DataQualityPage() {
                           {CHECK_LABELS[issue.checkName] ?? issue.checkName}
                         </td>
                         <td style={{ padding: '3px 8px', fontFamily: 'monospace', fontSize: 12 }}>
-                          {issue.symbolCode ?? '-'}
+                          {issue.symbolCode ? <SymbolLink code={issue.symbolCode} /> : '-'}
                         </td>
                         <td style={{ padding: '3px 8px', fontSize: 12, color: '#666' }}>
                           {issue.date ?? '-'}

@@ -3,7 +3,7 @@
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, fmtJpy, fmtPct, fmtDate, pnlClass } from '@/lib/api';
-import { Card, Stat } from '@/components/ui';
+import { Card, Stat, SymbolLink } from '@/components/ui';
 
 interface Trade {
   id: string;
@@ -64,7 +64,7 @@ export default function TradeDetail({
   return (
     <div>
       <p className="page-title">
-        {t.symbolCode} <span className="muted">トレード詳細</span>
+        <SymbolLink code={t.symbolCode} /> <span className="muted">トレード詳細</span>
       </p>
       <p className="page-sub">
         <Link href={`/backtests/${id}/trades`}>← 売買履歴へ戻る</Link>

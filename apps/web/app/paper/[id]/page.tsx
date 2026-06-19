@@ -2,7 +2,7 @@
 
 import { use, useEffect, useState } from 'react';
 import { api, fmtJpy, fmtPct, fmtDate, pnlClass } from '@/lib/api';
-import { Card, Stat, statusBadge } from '@/components/ui';
+import { Card, Stat, statusBadge, SymbolLink } from '@/components/ui';
 import { EquityChart } from '@/components/charts';
 
 interface PaperRun {
@@ -144,7 +144,7 @@ export default function PaperDetail({ params }: { params: Promise<{ id: string }
             <tbody>
               {run.openPositions.map((p) => (
                 <tr key={p.symbolCode}>
-                  <td>{p.symbolCode}</td>
+                  <td><SymbolLink code={p.symbolCode} /></td>
                   <td>{p.quantity}</td>
                   <td>{fmtJpy(p.avgPrice)}</td>
                   <td className="muted">{p.strategy}</td>
@@ -180,7 +180,7 @@ export default function PaperDetail({ params }: { params: Promise<{ id: string }
                     {fmtDate(o.createdAt)}
                     {o.sessionTime && <span className="muted"> {o.sessionTime}</span>}
                   </td>
-                  <td>{o.symbolCode}</td>
+                  <td><SymbolLink code={o.symbolCode} /></td>
                   <td className={o.side === 'buy' ? 'pos' : 'neg'}>{o.side === 'buy' ? '買' : '売'}</td>
                   <td>{fmtJpy(o.executionPrice)}</td>
                   <td>{o.executedQuantity ?? '-'}</td>
@@ -218,7 +218,7 @@ export default function PaperDetail({ params }: { params: Promise<{ id: string }
             <tbody>
               {trades.map((t) => (
                 <tr key={t.id}>
-                  <td>{t.symbolCode}</td>
+                  <td><SymbolLink code={t.symbolCode} /></td>
                   <td className="muted">{t.strategy}</td>
                   <td>{fmtDate(t.entryDate)}</td>
                   <td>{fmtJpy(t.entryPrice)}</td>

@@ -32,5 +32,9 @@ export const fmtDate = (d: string | null | undefined): string =>
 export const fmtSymbol = (code: string | null | undefined): string =>
   code && code.length === 5 && code.endsWith('0') ? code.slice(0, 4) : (code ?? '');
 
+// Public stock-detail page (chart, financials) for a ticker, keyed by the 4-digit code.
+export const minkabuUrl = (code: string | null | undefined): string =>
+  `https://minkabu.jp/stock/${fmtSymbol(code)}`;
+
 export const pnlClass = (n: number | null | undefined): string =>
   n === null || n === undefined ? '' : n >= 0 ? 'pos' : 'neg';

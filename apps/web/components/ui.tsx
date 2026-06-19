@@ -1,6 +1,24 @@
 import type { ReactNode } from 'react';
 import { CardRoot, CardTitle } from '@/components/ui/card';
 import { UiBadge } from '@/components/ui/badge';
+import { fmtSymbol, minkabuUrl } from '@/lib/api';
+
+/** A stock code rendered as a 4-digit link to its minkabu detail page (new tab). */
+export function SymbolLink({
+  code,
+  className,
+}: {
+  code: string | null | undefined;
+  className?: string;
+}) {
+  const display = fmtSymbol(code);
+  if (!display) return null;
+  return (
+    <a href={minkabuUrl(code)} target="_blank" rel="noopener noreferrer" className={className}>
+      {display}
+    </a>
+  );
+}
 
 type Tone = 'default' | 'green' | 'red' | 'yellow' | 'blue';
 

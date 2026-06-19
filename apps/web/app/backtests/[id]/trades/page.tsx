@@ -4,6 +4,7 @@ import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, fmtJpy, fmtPct, fmtDate, pnlClass } from '@/lib/api';
 import { BacktestTabs } from '@/components/BacktestTabs';
+import { SymbolLink } from '@/components/ui';
 
 interface Trade {
   id: string;
@@ -52,7 +53,10 @@ export default function TradesPage({ params }: { params: Promise<{ id: string }>
             {trades.map((t) => (
               <tr key={t.id}>
                 <td>
-                  <Link href={`/backtests/${id}/trades/${t.id}`}>{t.symbolCode}</Link>
+                  <SymbolLink code={t.symbolCode} />{' '}
+                  <Link href={`/backtests/${id}/trades/${t.id}`} className="muted" style={{ fontSize: 12 }}>
+                    詳細
+                  </Link>
                 </td>
                 <td className="muted">{t.strategy}</td>
                 <td>{fmtDate(t.entryDate)}</td>
