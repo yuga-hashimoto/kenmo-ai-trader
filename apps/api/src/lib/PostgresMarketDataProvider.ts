@@ -62,6 +62,7 @@ function toFinancial(row: {
   operatingMarginPrevPct: number;
   roePct: number;
   progressRateOpPct: number;
+  operatingCashFlowJpy: number | null;
   guidanceRevision: 'none' | 'up' | 'down';
 }): FinancialResultData {
   return {
@@ -78,6 +79,7 @@ function toFinancial(row: {
     operatingMarginPrevPct: row.operatingMarginPrevPct,
     roePct: row.roePct,
     progressRateOpPct: row.progressRateOpPct,
+    operatingCashFlowJpy: row.operatingCashFlowJpy ?? null,
     guidanceRevision: row.guidanceRevision,
   };
 }

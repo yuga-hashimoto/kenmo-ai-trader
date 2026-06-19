@@ -235,6 +235,7 @@ model FinancialResult {
   operatingMarginPrevPct Float
   roePct                Float
   progressRateOpPct     Float
+  operatingCashFlowJpy  Float?
   guidanceRevision      GuidanceRevision @default(none)
   rawJson               Json?
 

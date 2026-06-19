@@ -54,6 +54,7 @@ export function normalizeFinancialStatements(rows: JQuantsStatement[]): Normaliz
     const netIncome = num(row.Profit);
     const equity = num(row.Equity);
     const forecastOperatingProfit = num(row.ForecastOperatingProfit);
+    const opCashFlow = num(row.CashFlowsFromOperatingActivities);
     const periodKey = `${row.LocalCode}:${fiscalPeriodKey(row)}`;
     const previousSamePeriod = previousBySymbolPeriod.get(periodKey);
     const previousLatest = latestBySymbol.get(row.LocalCode);
@@ -78,6 +79,9 @@ export function normalizeFinancialStatements(rows: JQuantsStatement[]): Normaliz
         : 0,
       roePct: equity > 0 ? (netIncome / equity) * 100 : 0,
       progressRateOpPct: forecastOperatingProfit !== 0 ? (operatingProfit / forecastOperatingProfit) * 100 : 0,
+      // J-Quants reports operating CF only on full-year statements; 0 means "not in
+      // this filing", so treat it as unavailable rather than a real zero.
+      operatingCashFlowJpy: opCashFlow !== 0 ? opCashFlow : null,
       guidanceRevision: guidanceRevision(row, previousForGuidance),
       rawJson: row,
     };

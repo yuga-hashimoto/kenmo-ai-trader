@@ -20,7 +20,7 @@ export async function dataQualityRoutes(app: FastifyInstance): Promise<void> {
         }),
         prisma.financialResult.findMany({
           where: { announcedAt: { gte: new Date(`${from}T00:00:00Z`), lte: new Date(`${to}T00:00:00Z`) } },
-          select: { symbolCode: true, announcedAt: true, fiscalPeriod: true, sales: true, operatingProfit: true, ordinaryProfit: true, netIncome: true, salesYoyPct: true, operatingProfitYoyPct: true, operatingMarginPct: true, operatingMarginPrevPct: true, roePct: true, progressRateOpPct: true, guidanceRevision: true },
+          select: { symbolCode: true, announcedAt: true, fiscalPeriod: true, sales: true, operatingProfit: true, ordinaryProfit: true, netIncome: true, salesYoyPct: true, operatingProfitYoyPct: true, operatingMarginPct: true, operatingMarginPrevPct: true, roePct: true, progressRateOpPct: true, operatingCashFlowJpy: true, guidanceRevision: true },
         }),
         prisma.disclosure.findMany({
           where: { disclosedAt: { gte: new Date(`${from}T00:00:00Z`), lte: new Date(`${to}T00:00:00Z`) } },
@@ -65,6 +65,7 @@ export async function dataQualityRoutes(app: FastifyInstance): Promise<void> {
           operatingMarginPrevPct: f.operatingMarginPrevPct,
           roePct: f.roePct,
           progressRateOpPct: f.progressRateOpPct,
+          operatingCashFlowJpy: f.operatingCashFlowJpy ?? null,
           guidanceRevision: f.guidanceRevision as 'none' | 'up' | 'down',
         })),
         disclosures: disclosures.map((d) => ({

@@ -114,6 +114,9 @@ export class CsvDataImporter {
           roePct: Number(cols[11] ?? 0),
           progressRateOpPct: Number(cols[12] ?? 0),
           guidanceRevision,
+          // optional trailing column; absent in legacy CSVs → unavailable (null)
+          operatingCashFlowJpy:
+            cols[14] != null && cols[14].trim() !== '' ? Number(cols[14]) : null,
         };
       })
       .filter((f) => f.symbolCode && f.announcedAt);

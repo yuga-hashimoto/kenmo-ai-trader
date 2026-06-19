@@ -285,6 +285,7 @@ async function runJQuantsIngestion(
               operatingMarginPrevPct: row.operatingMarginPrevPct,
               roePct: row.roePct,
               progressRateOpPct: row.progressRateOpPct,
+              operatingCashFlowJpy: row.operatingCashFlowJpy ?? null,
               guidanceRevision: row.guidanceRevision,
               rawJson: row.rawJson as unknown as Prisma.InputJsonValue,
             },
@@ -455,26 +456,37 @@ function mapYahooFinancials(yahooData: any, symbolCode: string): any[] {
 function mapYFinancePythonFinancials(pyData: any, symbolCode: string): any[] {
   const fin = pyData?.financials || {};
   const bal = pyData?.balance_sheet || {};
-  
+  const cf = pyData?.cashflow || {};
+
   const dates = Object.keys(fin).sort();
   const results: any[] = [];
-  
+
   for (const dateStr of dates) {
     const inc = fin[dateStr] || {};
     const bs = bal[dateStr] || {};
-    
+    const cfs = cf[dateStr] || {};
+
     const sales = inc["Total Revenue"] || inc["Revenue"] || 0;
     const operatingProfit = inc["Operating Income"] || inc["Operating Profit"] || 0;
     const ordinaryProfit = operatingProfit;
     const netIncome = inc["Net Income"] || 0;
-    
+
     // ROE uses shareholders' equity, NOT total assets (that would be ROA).
     const equity =
       bs["Stockholders Equity"] ||
       bs["Total Equity Gross Minority Interest"] ||
       bs["Common Stock Equity"] ||
       0;
-    
+
+    // Operating cash flow — used to flag "profit without cash" (accrual-heavy
+    // earnings). null when yfinance doesn't supply it for this period.
+    const opCfRaw =
+      cfs["Operating Cash Flow"] ??
+      cfs["Total Cash From Operating Activities"] ??
+      cfs["Cash Flow From Continuing Operating Activities"] ??
+      null;
+    const operatingCashFlowJpy = typeof opCfRaw === 'number' ? opCfRaw : null;
+
     results.push({
       symbolCode,
       announcedAt: new Date(dateStr),
@@ -489,8 +501,9 @@ function mapYFinancePythonFinancials(pyData: any, symbolCode: string): any[] {
       operatingMarginPrevPct: 0,
       roePct: equity > 0 ? (netIncome / equity) * 100 : 0,
       progressRateOpPct: 100,
+      operatingCashFlowJpy,
       guidanceRevision: 'none',
-      rawJson: { income: inc, balance: bs }
+      rawJson: { income: inc, balance: bs, cashflow: cfs }
     });
   }
   

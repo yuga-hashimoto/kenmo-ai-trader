@@ -30,6 +30,7 @@ function fin(overrides: Partial<FinancialResultData> = {}): FinancialResultData 
     operatingMarginPrevPct: 10,
     roePct: 14,
     progressRateOpPct: 55,
+    operatingCashFlowJpy: 9e8,
     guidanceRevision: 'none',
     ...overrides,
   };
@@ -62,6 +63,24 @@ describe('EarningsQualityScore', () => {
       af.earningsQuality,
     );
     expect(noGrowth!.noSalesGrowthPenalty).toBeLessThan(0);
+  });
+
+  it('純利益プラスでも営業CFがマイナスなら強く減点される', () => {
+    const healthy = computeEarningsQuality(fin({ operatingCashFlowJpy: 9e8 }), '', af.earningsQuality);
+    const noCash = computeEarningsQuality(fin({ operatingCashFlowJpy: -2e8 }), '', af.earningsQuality);
+    expect(noCash!.lowCashConversionPenalty).toBe(-30);
+    expect(noCash!.score).toBeLessThan(healthy!.score);
+  });
+
+  it('営業CF/純利益が0.5未満なら減点される', () => {
+    // netIncome 8e8, opCF 2e8 → 25% conversion
+    const weak = computeEarningsQuality(fin({ operatingCashFlowJpy: 2e8 }), '', af.earningsQuality);
+    expect(weak!.lowCashConversionPenalty).toBe(-15);
+  });
+
+  it('営業CFがnull(未取得)なら減点しない', () => {
+    const unknown = computeEarningsQuality(fin({ operatingCashFlowJpy: null }), '', af.earningsQuality);
+    expect(unknown!.lowCashConversionPenalty).toBe(0);
   });
 });
 

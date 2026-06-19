@@ -16,6 +16,9 @@ export interface EarningsQualityFeature {
   oneTimeProfitRiskPenalty: number;
   noSalesGrowthPenalty: number;
   operatingMarginDeteriorationPenalty: number;
+  /** penalty when net income is positive but operating cash flow is weak/negative
+   *  ("profit on paper, no cash"). 0 when CF is unavailable. */
+  lowCashConversionPenalty: number;
   guidanceRevisionScore: number;
   positiveFactors: string[];
   negativeFactors: string[];
@@ -153,6 +156,23 @@ export function computeEarningsQuality(
     }
   }
 
+  // Cash conversion: positive accounting profit should be backed by operating cash.
+  // Weak or negative operating CF flags accrual-heavy / low-quality earnings.
+  // Skipped when CF is unavailable (null) so we never penalize on missing data.
+  let lowCashConversionPenalty = 0;
+  if (fin.operatingCashFlowJpy != null && fin.netIncome > 0) {
+    const cashConversion = fin.operatingCashFlowJpy / fin.netIncome;
+    if (fin.operatingCashFlowJpy < 0) {
+      lowCashConversionPenalty = -30;
+      negativeFactors.push('純利益プラスだが営業CFマイナス');
+    } else if (cashConversion < 0.5) {
+      lowCashConversionPenalty = -15;
+      negativeFactors.push(`営業CF/純利益が低い(${(cashConversion * 100).toFixed(0)}%)`);
+    } else if (cashConversion >= 1) {
+      positiveFactors.push('営業CFが純利益を上回る');
+    }
+  }
+
   const score = clamp(
     salesGrowthScore +
       operatingProfitGrowthScore +
@@ -160,7 +180,8 @@ export function computeEarningsQuality(
       guidanceRevisionScore +
       noSalesGrowthPenalty +
       operatingMarginDeteriorationPenalty +
-      oneTimeProfitRiskPenalty,
+      oneTimeProfitRiskPenalty +
+      lowCashConversionPenalty,
   );
 
   return {
@@ -171,6 +192,7 @@ export function computeEarningsQuality(
     oneTimeProfitRiskPenalty,
     noSalesGrowthPenalty,
     operatingMarginDeteriorationPenalty,
+    lowCashConversionPenalty,
     guidanceRevisionScore,
     positiveFactors,
     negativeFactors,

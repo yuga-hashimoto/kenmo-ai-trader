@@ -114,6 +114,7 @@ export class PostgresMarketDataProvider implements MarketDataProvider {
       operatingMarginPrevPct: r.operatingMarginPrevPct,
       roePct: r.roePct,
       progressRateOpPct: r.progressRateOpPct,
+      operatingCashFlowJpy: r.operatingCashFlowJpy ?? null,
       guidanceRevision: r.guidanceRevision as any,
       rawJson: r.rawJson as any,
     }));

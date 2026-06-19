@@ -63,6 +63,7 @@ async function main(): Promise<void> {
       operatingMarginPrevPct: f.operatingMarginPrevPct,
       roePct: f.roePct,
       progressRateOpPct: f.progressRateOpPct,
+      operatingCashFlowJpy: f.operatingCashFlowJpy ?? null,
       guidanceRevision: f.guidanceRevision,
       rawJson: f as unknown as object,
     })),

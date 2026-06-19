@@ -71,6 +71,9 @@ export interface FinancialResultData {
   operatingMarginPrevPct: number;
   roePct: number;
   progressRateOpPct: number;
+  /** Operating cash flow (¥); null when unavailable. Quality check: positive net
+   *  income but weak/negative operating CF flags "profit without cash". */
+  operatingCashFlowJpy: number | null;
   guidanceRevision: GuidanceRevision;
 }
 

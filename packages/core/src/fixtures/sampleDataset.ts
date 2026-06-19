@@ -173,6 +173,10 @@ function buildFinancials(spec: SymbolSpec, dates: string[]): FinancialResultData
       operatingMarginPrevPct: marginCur - (strong ? 1.5 : 0.2),
       roePct: spec.code === '9984C' ? 15 + idx : strong ? 12 + idx : 8 + idx * 0.5,
       progressRateOpPct: strong ? 55 + idx * 5 : 40 + idx * 3,
+      // strong names convert profit to cash (CF > net income); weak names lag it
+      operatingCashFlowJpy: strong
+        ? (800_000_000 + idx * 120_000_000) * 1.2
+        : (800_000_000 + idx * 120_000_000) * 0.4,
       guidanceRevision: strong && idx >= 1 ? 'up' : 'none',
     });
   });
