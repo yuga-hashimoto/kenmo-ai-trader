@@ -16,6 +16,7 @@
     "dev:web": "pnpm --filter @kenmo/web dev",
     "data:bootstrap:free": "tsx scripts/trigger_bootstrap.js",
     "data:quality": "tsx scripts/run_quality.js",
+    "decision-journal": "node scripts/decision-journal.mjs",
     "typecheck": "pnpm -r typecheck",
     "build": "pnpm -r build",
     "test": "pnpm --filter @kenmo/core test && pnpm --filter @kenmo/hermes test",

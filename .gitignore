@@ -21,3 +21,6 @@ apps/web/playwright-report/
 apps/api/agent_decision.json
 apps/api/hermes-output.json
 apps/api/output.json
+
+# Generated analysis output
+/data/

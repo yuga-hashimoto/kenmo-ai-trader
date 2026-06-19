@@ -17,6 +17,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <div className="tag">HermesAgent · backtest/paper</div>
             <nav className="nav">
               <Link href="/">ダッシュボード</Link>
+              <Link href="/today">今日の結果</Link>
               <Link href="/backtests">バックテスト</Link>
               <Link href="/paper">Paper運用</Link>
               <Link href="/strategies">戦略 (Champion/Challenger)</Link>
